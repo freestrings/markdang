@@ -1,0 +1,13 @@
+target
+Cargo.lock
+
+# Intellij
+.idea/
+*.iml
+*.iws
+
+# Mac
+.DS_Store
+
+# vs code
+.vscode
