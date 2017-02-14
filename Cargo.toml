@@ -4,8 +4,9 @@ version = "0.1.0"
 authors = ["Changseok Han <freestrings@gmail.com>"]
 
 [dependencies]
-rtag = "0.2.1"
 clap = "2"
+rtag = "0.2.1"
 serde = "0.9"
 serde_derive = "0.9"
 serde_json = "0.9"
+time = "*"

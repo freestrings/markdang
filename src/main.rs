@@ -1,5 +1,7 @@
-extern crate rtag;
 extern crate clap;
+extern crate rtag;
+extern crate time;
+
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
@@ -7,75 +9,308 @@ extern crate serde_json;
 use clap::App;
 use rtag::metadata::MetadataReader as Reader;
 use rtag::metadata::Unit;
-use rtag::frame::{HeadFlag, FlagAware, FrameBody};
+use rtag::frame;
+use rtag::frame::*;
+use time::PreciseTime;
 
 use std::vec::Vec;
 
-#[derive(Debug, Serialize)]
-struct Id3 {
-    file: String,
+#[derive(Serialize)]
+struct All<'a> {
+    file: &'a str,
     head: Option<Head>,
-    frames: Option<Vec<FrameBody>>
+    frames: Option<Vec<Frame>>,
+    frame1: Option<Frame1>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 struct Head {
-    version: u8,
-    flags: Option<Vec<HeadFlag>>
+    version: String,
+    flags: Option<Vec<HeadFlag>>,
+}
+
+#[derive(Serialize)]
+struct Frame {
+    flags: Option<Vec<FrameHeaderFlag>>,
+    body: FrameBody,
+}
+
+#[derive(Serialize)]
+struct Simple<'a> {
+    file: &'a str,
+    version: Option<String>,
+    frames: Option<Vec<String>>,
+    frame1: Option<Vec<String>>,
+}
+
+fn collect(file: &str)
+           -> (Option<frame::Head>, Option<Vec<(FrameHeader, FrameBody)>>, Option<Frame1>) {
+    let mut head = None;
+    let mut frames = Vec::new();
+    let mut frame1 = None;
+
+    match Reader::new(file) {
+        Ok(reader) => {
+            for unit in reader {
+                match unit {
+                    Unit::Header(_head) => head = Some(_head),
+                    Unit::FrameV2(_fhead, _fbody) => frames.push((_fhead, _fbody)),
+                    Unit::FrameV1(_frame) => frame1 = Some(_frame),
+                    _ => (),
+                }
+            }
+        }
+        _ => (),
+    };
+
+    if frames.len() > 0 {
+        (head, Some(frames), frame1)
+    } else {
+        (head, None, frame1)
+    }
+}
+
+fn filter_body(_body: FrameBody) -> FrameBody {
+    match _body {
+        FrameBody::PIC(ref body) => {
+            FrameBody::PIC(PIC {
+                text_encoding: body.text_encoding.clone(),
+                image_format: body.image_format.clone(),
+                picture_type: body.picture_type.clone(),
+                description: body.description.clone(),
+                picture_data: Vec::new(),
+            })
+        }
+        FrameBody::APIC(ref body) => {
+            FrameBody::APIC(APIC {
+                text_encoding: body.text_encoding.clone(),
+                mime_type: body.mime_type.clone(),
+                picture_type: body.picture_type.clone(),
+                description: body.description.clone(),
+                picture_data: Vec::new(),
+            })
+        }
+        _ => _body,
+    }
+}
+
+fn all(file: &str) -> String {
+    let (head, frames, frame1) = collect(file);
+
+    let head = if head.is_some() {
+        let head = head.unwrap();
+        let mut flags = Vec::new();
+
+        if head.has_flag(HeadFlag::Compression) {
+            flags.push(HeadFlag::Compression);
+        }
+
+        if head.has_flag(HeadFlag::Unsynchronisation) {
+            flags.push(HeadFlag::Unsynchronisation);
+        }
+
+        Some(Head {
+            version: head.version.to_string(),
+            flags: if flags.len() > 0 { Some(flags) } else { None },
+        })
+    } else {
+        None
+    };
+
+    let frames = if frames.is_some() {
+        let frames = frames.unwrap()
+            .into_iter()
+            .fold(Vec::new(), |mut vec, frame| {
+                let frame = match frame {
+                    (FrameHeader::V22(_), fbody) => {
+                        Frame {
+                            flags: None,
+                            body: fbody,
+                        }
+                    }
+                    (FrameHeader::V23(fhead), fbody) => {
+                        let mut flags = Vec::new();
+
+                        if fhead.has_flag(FrameHeaderFlag::Compression) {
+                            flags.push(FrameHeaderFlag::Compression);
+                        }
+
+                        if fhead.has_flag(FrameHeaderFlag::Encryption) {
+                            flags.push(FrameHeaderFlag::Encryption);
+                        }
+
+                        if fhead.has_flag(FrameHeaderFlag::FileAlter) {
+                            flags.push(FrameHeaderFlag::FileAlter);
+                        }
+
+                        if fhead.has_flag(FrameHeaderFlag::GroupIdentity) {
+                            flags.push(FrameHeaderFlag::GroupIdentity);
+                        }
+
+                        if fhead.has_flag(FrameHeaderFlag::ReadOnly) {
+                            flags.push(FrameHeaderFlag::ReadOnly);
+                        }
+
+                        if fhead.has_flag(FrameHeaderFlag::TagAlter) {
+                            flags.push(FrameHeaderFlag::TagAlter);
+                        }
+
+                        Frame {
+                            flags: if flags.len() > 0 { Some(flags) } else { None },
+                            body: filter_body(fbody),
+                        }
+                    }
+                    (FrameHeader::V24(fhead), fbody) => {
+                        let mut flags = Vec::new();
+
+                        if fhead.has_flag(FrameHeaderFlag::Compression) {
+                            flags.push(FrameHeaderFlag::Compression);
+                        }
+
+                        if fhead.has_flag(FrameHeaderFlag::Encryption) {
+                            flags.push(FrameHeaderFlag::Encryption);
+                        }
+
+                        if fhead.has_flag(FrameHeaderFlag::FileAlter) {
+                            flags.push(FrameHeaderFlag::FileAlter);
+                        }
+
+                        if fhead.has_flag(FrameHeaderFlag::GroupIdentity) {
+                            flags.push(FrameHeaderFlag::GroupIdentity);
+                        }
+
+                        if fhead.has_flag(FrameHeaderFlag::ReadOnly) {
+                            flags.push(FrameHeaderFlag::ReadOnly);
+                        }
+
+                        if fhead.has_flag(FrameHeaderFlag::TagAlter) {
+                            flags.push(FrameHeaderFlag::TagAlter);
+                        }
+
+                        if fhead.has_flag(FrameHeaderFlag::DataLength) {
+                            flags.push(FrameHeaderFlag::DataLength);
+                        }
+
+                        if fhead.has_flag(FrameHeaderFlag::Unsynchronisation) {
+                            flags.push(FrameHeaderFlag::Unsynchronisation);
+                        }
+
+                        Frame {
+                            flags: if flags.len() > 0 { Some(flags) } else { None },
+                            body: filter_body(fbody),
+                        }
+                    }
+                };
+
+                vec.push(frame);
+
+                vec
+            });
+
+        if frames.len() > 0 { Some(frames) } else { None }
+    } else {
+        None
+    };
+
+    let all = All {
+        file: file,
+        head: head,
+        frames: frames,
+        frame1: frame1,
+    };
+
+    match serde_json::to_string(&all) {
+        Ok(s) => s,
+        _ => "{err: \"\"}".to_string(),
+    }
+}
+
+fn simple(file: &str) -> String {
+    let (head, frames, frame1) = collect(file);
+
+    let version = if head.is_some() {
+        Some(head.unwrap().version.to_string())
+    } else {
+        None
+    };
+
+    let frame_ids = if frames.is_some() {
+        Some(frames.unwrap()
+            .into_iter()
+            .map(|(fhead, _)| match fhead {
+                FrameHeader::V22(fhead) => fhead.id,
+                FrameHeader::V23(fhead) => fhead.id,
+                FrameHeader::V24(fhead) => fhead.id,
+            })
+            .collect::<Vec<String>>())
+    } else {
+        None
+    };
+
+    let frame1_ids = if frame1.is_some() {
+        let frame = frame1.unwrap();
+
+        let mut ret = Vec::new();
+        if !frame.album.is_empty() {
+            ret.push("album".to_string());
+        }
+        if !frame.artist.is_empty() {
+            ret.push("artist".to_string());
+        }
+        if !frame.comment.is_empty() {
+            ret.push("comment".to_string());
+        }
+        if !frame.genre.is_empty() {
+            ret.push("genre".to_string());
+        }
+        if !frame.title.is_empty() {
+            ret.push("title".to_string());
+        }
+        if !frame.track.is_empty() {
+            ret.push("track".to_string());
+        }
+        if !frame.year.is_empty() {
+            ret.push("year".to_string());
+        }
+
+        Some(ret)
+    } else {
+        None
+    };
+
+    let s = Simple {
+        file: file,
+        version: version,
+        frames: frame_ids,
+        frame1: frame1_ids,
+    };
+
+    match serde_json::to_string(&s) {
+        Ok(s) => s,
+        _ => "{err: \"\"}".to_string(),
+    }
 }
 
 fn main() {
     let matches = App::new("automarkddang")
         .version("0.1")
         .author("Changseok Han <freestrings@gmail.com>")
-        .args_from_usage("<INPUT>... 'mp3 file pathes. ex) ./automarkddang file1 file2'")
+        .args_from_usage("<INPUT>... 'mp3 file pathes. ex) ./automarkddang file1 file2'
+            \
+                          -s --simple             'print simple \
+                          information'
+            ")
         .get_matches();
 
-    let files = matches.values_of("INPUT").unwrap();
+    let files: Vec<_> = matches.values_of("INPUT").unwrap().collect();
+    let is_simple = matches.is_present("simple");
+    let start = PreciseTime::now();
 
+    println!("[");
     for file in files {
-
-        let mut head = None;
-        let mut frames = Vec::new();
-
-        match Reader::new(file) {
-            Ok(reader) => {
-                for u in reader {
-                    match u {
-                        Unit::Header(_head) => {
-                            let mut flags = Vec::new();
-
-                            if _head.has_flag(HeadFlag::Compression) {
-                                flags.push(HeadFlag::Compression);
-                            }
-
-                            if _head.has_flag(HeadFlag::Unsynchronisation) {
-                                flags.push(HeadFlag::Unsynchronisation);
-                            }
-
-                            head = Some(Head {
-                                version: _head.version,
-                                flags: if flags.len() > 0 { Some(flags) } else { None }
-                            });
-
-                        },
-                        Unit::FrameV2(_, fbody) => {
-                            frames.push(fbody);
-                        }
-                        _ => (),
-                    }
-                }
-            }
-            _ => println!("Invalid file '{}'", file),
-        }
-
-        let id3 = Id3 {
-            file: file.to_owned(),
-            head: head,
-            frames: if frames.len() > 0 { Some(frames) } else { None }
-        };
-
-        let j = serde_json::to_string(&id3).unwrap();
-        println!("{}", j);
+        let item = if is_simple { simple(file) } else { all(file) };
+        println!("{},", item);
     }
+    println!("\"{}\"", start.to(PreciseTime::now()));
+    println!("]");
 }
