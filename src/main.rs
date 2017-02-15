@@ -13,6 +13,8 @@ use rtag::frame;
 use rtag::frame::*;
 use time::PreciseTime;
 
+use std::fmt;
+use std::str;
 use std::vec::Vec;
 
 #[derive(Serialize)]
@@ -21,6 +23,43 @@ struct All<'a> {
     head: Option<Head>,
     frames: Option<Vec<Frame>>,
     frame1: Option<Frame1>,
+}
+
+impl<'a> fmt::Display for All<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let _ = write!(f, "{}\n", self.file);
+
+        match self.head {
+            Some(ref v) => {
+                let _ = write!(f, "\tversion: {}\n", v.version);
+                if let Some(ref v) = v.flags {
+                    let _ = write!(f, "\tflags: {:?}\n", v);
+                }
+            }
+            _ => (),
+        };
+
+        match self.frames {
+            Some(ref vv) => {
+                for v in vv {
+                    if let Some(ref v) = v.flags {
+                        let _ = write!(f, "\tframe_flags: {:?}\n", v);
+                    }
+                    let _ = write!(f, "\t{:?}\n", v.body);
+                }
+            }
+            _ => (),
+        };
+
+        match self.frame1 {
+            Some(ref v) => {
+                let _ = write!(f, "\n{:?}", v);
+            }
+            _ => (),
+        };
+
+        Ok(())
+    }
 }
 
 #[derive(Serialize)]
@@ -43,11 +82,74 @@ struct Simple<'a> {
     frame1: Option<Vec<String>>,
 }
 
-fn collect(file: &str)
-           -> (Option<frame::Head>, Option<Vec<(FrameHeader, FrameBody)>>, Option<Frame1>) {
+impl<'a> fmt::Display for Simple<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let _ = write!(f, "{}, ", self.file);
+
+        match self.version {
+            Some(ref v) => {
+                let _ = write!(f, "version: {}, ", v);
+            }
+            _ => (),
+        };
+
+        match self.frames {
+            Some(ref v) => {
+                let _ = write!(f, "frames: {:?}, ", v);
+            }
+            _ => (),
+
+        };
+
+        match self.frame1 {
+            Some(ref v) => {
+                let _ = write!(f, "v1: {:?},", v);
+            }
+            _ => (),
+        }
+
+        Ok(())
+    }
+}
+
+fn collect
+    (file: &str,
+     filter: &Vec<&str>,
+     not_filter: &Vec<&str>)
+     -> Option<(Option<frame::Head>, Option<Vec<(FrameHeader, FrameBody)>>, Option<Frame1>)> {
     let mut head = None;
     let mut frames = Vec::new();
     let mut frame1 = None;
+
+    fn start_with_in(id: &str, filter: &Vec<&str>) -> bool {
+        for f in filter {
+            return match id.find(f) {
+                Some(idx) => idx == 0,
+                _ => false,
+            };
+        }
+
+        false
+    }
+
+    fn filter_fn(frames: &Vec<(FrameHeader, FrameBody)>, filter: &Vec<&str>) -> bool {
+        for frame in frames {
+            let &(ref fhead, _) = frame;
+            let id = match fhead {
+                &FrameHeader::V22(ref head) => head.id.clone(),
+                &FrameHeader::V23(ref head) => head.id.clone(),
+                &FrameHeader::V24(ref head) => head.id.clone(),
+            };
+
+            let id = id.as_str();
+
+            if start_with_in(id, filter) {
+                return true;
+            }
+        }
+
+        false
+    }
 
     match Reader::new(file) {
         Ok(reader) => {
@@ -63,11 +165,19 @@ fn collect(file: &str)
         _ => (),
     };
 
-    if frames.len() > 0 {
-        (head, Some(frames), frame1)
-    } else {
-        (head, None, frame1)
+    if filter.len() > 0 {
+        if !filter_fn(&frames, &filter) {
+            return None;
+        }
     }
+
+    if not_filter.len() > 0 {
+        if filter_fn(&frames, &not_filter) {
+            return Some((head, if frames.len() > 0 { Some(frames) } else { None }, frame1));
+        }
+    }
+
+    Some((head, if frames.len() > 0 { Some(frames) } else { None }, frame1))
 }
 
 fn filter_body(_body: FrameBody) -> FrameBody {
@@ -94,8 +204,14 @@ fn filter_body(_body: FrameBody) -> FrameBody {
     }
 }
 
-fn all(file: &str) -> String {
-    let (head, frames, frame1) = collect(file);
+fn all<'a>(file: &'a str, filter: &Vec<&str>, not_filter: &Vec<&str>) -> Option<All<'a>> {
+    let collected = collect(file, filter, not_filter);
+
+    if collected.is_none() {
+        return None;
+    }
+
+    let (head, frames, frame1) = collected.unwrap();
 
     let head = if head.is_some() {
         let head = head.unwrap();
@@ -212,21 +328,22 @@ fn all(file: &str) -> String {
         None
     };
 
-    let all = All {
+    Some(All {
         file: file,
         head: head,
         frames: frames,
         frame1: frame1,
-    };
-
-    match serde_json::to_string(&all) {
-        Ok(s) => s,
-        _ => "{err: \"\"}".to_string(),
-    }
+    })
 }
 
-fn simple(file: &str) -> String {
-    let (head, frames, frame1) = collect(file);
+fn simple<'a>(file: &'a str, filter: &Vec<&str>, not_filter: &Vec<&str>) -> Option<Simple<'a>> {
+    let collected = collect(file, filter, not_filter);
+
+    if collected.is_none() {
+        return None;
+    }
+
+    let (head, frames, frame1) = collected.unwrap();
 
     let version = if head.is_some() {
         Some(head.unwrap().version.to_string())
@@ -278,17 +395,78 @@ fn simple(file: &str) -> String {
         None
     };
 
-    let s = Simple {
+    Some(Simple {
         file: file,
         version: version,
         frames: frame_ids,
         frame1: frame1_ids,
-    };
+    })
+}
 
-    match serde_json::to_string(&s) {
-        Ok(s) => s,
-        _ => "{err: \"\"}".to_string(),
+fn json(format: Format, files: Vec<&str>, filter: &Vec<&str>, not_filter: &Vec<&str>) {
+    let start = PreciseTime::now();
+    println!("[");
+    for file in files {
+        match format {
+            Format::Simple => {
+                if let Some(s) = simple(file, filter, not_filter) {
+                    let json_str = match serde_json::to_string(&s) {
+                        Ok(s) => s,
+                        _ => "{\"err\": \"\"}".to_string(),
+                    };
+                    println!("{},", json_str);
+                }
+            }
+            Format::SuperSimple => {
+                if let Some(_) = simple(file, filter, not_filter) {
+                    println!("\"{}\",", file);
+                }
+            }
+            _ => {
+                if let Some(s) = all(file, filter, not_filter) {
+                    let json_str = match serde_json::to_string(&s) {
+                        Ok(s) => s,
+                        _ => "{\"err\": \"\"}".to_string(),
+                    };
+
+                    println!("{},", json_str);
+                }
+            }
+        };
     }
+    println!("\"{}\"", start.to(PreciseTime::now()));
+    println!("]");
+}
+
+fn text(format: Format, files: Vec<&str>, filter: &Vec<&str>, not_filter: &Vec<&str>) {
+    let start = PreciseTime::now();
+    for file in files {
+        match format {
+            Format::Simple => {
+                if let Some(s) = simple(file, filter, not_filter) {
+                    println!("{}", s);
+                }
+            }
+            Format::SuperSimple => {
+                if let Some(_) = simple(file, filter, not_filter) {
+                    println!("\"{}\"", file);
+                }
+            }
+            _ => {
+                if let Some(s) = all(file, filter, not_filter) {
+                    println!("{}", s);
+                }
+            }
+        };
+    }
+    println!("{}", start.to(PreciseTime::now()));
+}
+
+#[derive(Debug)]
+enum Format {
+    Simple,
+    SuperSimple,
+    All,
 }
 
 fn main() {
@@ -296,21 +474,52 @@ fn main() {
         .version("0.1")
         .author("Changseok Han <freestrings@gmail.com>")
         .args_from_usage("<INPUT>... 'mp3 file pathes. ex) ./automarkddang file1 file2'
-            \
-                          -s --simple             'print simple \
-                          information'
+                          \
+                          -t --text 'print as text format. if not given, print as json'
+                          -s... --simple 'print as simple imformation. if not given, print all'
+                          -m \
+                          --match=[MATCH] 'it find to match id. and it support comma \
+                          seperated multiple id ex) -m TIT2,TALB and !(not) operator also. -m !T'
             ")
         .get_matches();
 
     let files: Vec<_> = matches.values_of("INPUT").unwrap().collect();
-    let is_simple = matches.is_present("simple");
-    let start = PreciseTime::now();
 
-    println!("[");
-    for file in files {
-        let item = if is_simple { simple(file) } else { all(file) };
-        println!("{},", item);
+    let filter: Vec<&str> = if matches.is_present("match") {
+        let id_str = matches.value_of("match").unwrap();
+        id_str.split(",").collect()
+    } else {
+        Vec::new()
+    };
+
+    let not_filter: Vec<&str> = filter.clone()
+        .iter()
+        .filter(|i| i.find("!") == Some(0))
+        .map(|i| {
+            let (_, last) = i.split_at(1);
+            last
+        })
+        .collect();
+
+    let filter: Vec<&str> = filter.iter()
+        .filter(|i| i.find("!") == None)
+        .map(|i| *i)
+        .collect();
+
+    let mut format = if matches.is_present("simple") {
+        Format::Simple
+    } else {
+        Format::All
+    };
+
+    if matches.occurrences_of("simple") > 1 {
+        format = Format::SuperSimple
     }
-    println!("\"{}\"", start.to(PreciseTime::now()));
-    println!("]");
+
+    if matches.is_present("text") {
+        text(format, files, &filter, &not_filter);
+    } else {
+        json(format, files, &filter, &not_filter);
+    }
+
 }
