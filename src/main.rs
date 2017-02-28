@@ -9,20 +9,40 @@ extern crate serde_json;
 use clap::App;
 use rtag::metadata::MetadataReader as Reader;
 use rtag::metadata::Unit;
-use rtag::frame;
 use rtag::frame::*;
+use rtag::frame::types::*;
 use time::PreciseTime;
 
 use std::fmt;
 use std::str;
-use std::vec::Vec;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Serialize)]
 struct All<'a> {
     file: &'a str,
-    head: Option<Head>,
-    frames: Option<Vec<Frame>>,
+    head: Option<ViewHead>,
+    frames: Option<Vec<ViewFrame>>,
     frame1: Option<Frame1>,
+}
+
+#[derive(Serialize)]
+struct ViewHead {
+    version: String,
+    flags: Option<Vec<HeadFlag>>,
+}
+
+#[derive(Serialize)]
+struct ViewFrame {
+    flags: Option<Vec<FrameHeaderFlag>>,
+    body: FrameBody,
+}
+
+#[derive(Serialize)]
+struct Simple<'a> {
+    file: &'a str,
+    version: Option<String>,
+    frames: Option<Vec<String>>,
+    frame1: Option<Vec<String>>,
 }
 
 impl<'a> fmt::Display for All<'a> {
@@ -62,26 +82,6 @@ impl<'a> fmt::Display for All<'a> {
     }
 }
 
-#[derive(Serialize)]
-struct Head {
-    version: String,
-    flags: Option<Vec<HeadFlag>>,
-}
-
-#[derive(Serialize)]
-struct Frame {
-    flags: Option<Vec<FrameHeaderFlag>>,
-    body: FrameBody,
-}
-
-#[derive(Serialize)]
-struct Simple<'a> {
-    file: &'a str,
-    version: Option<String>,
-    frames: Option<Vec<String>>,
-    frame1: Option<Vec<String>>,
-}
-
 impl<'a> fmt::Display for Simple<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let _ = write!(f, "{}, ", self.file);
@@ -112,361 +112,417 @@ impl<'a> fmt::Display for Simple<'a> {
     }
 }
 
-fn collect
-    (file: &str,
-     filter: &Vec<&str>,
-     not_filter: &Vec<&str>)
-     -> Option<(Option<frame::Head>, Option<Vec<(FrameHeader, FrameBody)>>, Option<Frame1>)> {
-    let mut head = None;
-    let mut frames = Vec::new();
-    let mut frame1 = None;
+fn frame1_to_map(frame: &Frame1) -> HashMap<&str, String> {
+    let mut ret = HashMap::new();
 
-    fn start_with_in(id: &str, filter: &Vec<&str>) -> bool {
-        for f in filter {
-            return match id.find(f) {
-                Some(idx) => idx == 0,
-                _ => false,
-            };
-        }
-
-        false
+    if !frame.album.is_empty() {
+        ret.insert("album", frame.album.to_string());
+    }
+    if !frame.artist.is_empty() {
+        ret.insert("artist", frame.artist.to_string());
+    }
+    if !frame.comment.is_empty() {
+        ret.insert("comment", frame.comment.to_string());
+    }
+    if !frame.genre.is_empty() {
+        ret.insert("genre", frame.genre.to_string());
+    }
+    if !frame.title.is_empty() {
+        ret.insert("title", frame.title.to_string());
+    }
+    if !frame.track.is_empty() {
+        ret.insert("track", frame.track.to_string());
+    }
+    if !frame.year.is_empty() {
+        ret.insert("year", frame.year.to_string());
     }
 
-    fn filter_fn(frames: &Vec<(FrameHeader, FrameBody)>, filter: &Vec<&str>) -> bool {
-        for frame in frames {
-            let &(ref fhead, _) = frame;
-            let id = match fhead {
-                &FrameHeader::V22(ref head) => head.id.clone(),
-                &FrameHeader::V23(ref head) => head.id.clone(),
-                &FrameHeader::V24(ref head) => head.id.clone(),
-            };
-
-            let id = id.as_str();
-
-            if start_with_in(id, filter) {
-                return true;
-            }
-        }
-
-        false
-    }
-
-    match Reader::new(file) {
-        Ok(reader) => {
-            for unit in reader {
-                match unit {
-                    Unit::Header(_head) => head = Some(_head),
-                    Unit::FrameV2(_fhead, _fbody) => frames.push((_fhead, _fbody)),
-                    Unit::FrameV1(_frame) => frame1 = Some(_frame),
-                    _ => (),
-                }
-            }
-        }
-        _ => (),
-    };
-
-    if filter.len() > 0 {
-        if !filter_fn(&frames, &filter) {
-            return None;
-        }
-    }
-
-    if not_filter.len() > 0 {
-        if filter_fn(&frames, &not_filter) {
-            return Some((head, if frames.len() > 0 { Some(frames) } else { None }, frame1));
-        }
-    }
-
-    Some((head, if frames.len() > 0 { Some(frames) } else { None }, frame1))
+    ret
 }
 
-fn filter_body(_body: FrameBody) -> FrameBody {
-    match _body {
-        FrameBody::PIC(ref body) => {
-            FrameBody::PIC(PIC {
-                text_encoding: body.text_encoding.clone(),
-                image_format: body.image_format.clone(),
-                picture_type: body.picture_type.clone(),
-                description: body.description.clone(),
-                picture_data: Vec::new(),
-            })
-        }
-        FrameBody::APIC(ref body) => {
-            FrameBody::APIC(APIC {
-                text_encoding: body.text_encoding.clone(),
-                mime_type: body.mime_type.clone(),
-                picture_type: body.picture_type.clone(),
-                description: body.description.clone(),
-                picture_data: Vec::new(),
-            })
-        }
-        _ => _body,
-    }
-}
+fn simple<'a>(file: &'a str, match_filter: &Box<Fn(String, &FrameBody) -> bool>) -> Option<Simple<'a>> {
+    let reader = Reader::new(file);
 
-fn all<'a>(file: &'a str, filter: &Vec<&str>, not_filter: &Vec<&str>) -> Option<All<'a>> {
-    let collected = collect(file, filter, not_filter);
-
-    if collected.is_none() {
+    if reader.is_err() {
         return None;
     }
 
-    let (head, frames, frame1) = collected.unwrap();
-
-    let head = if head.is_some() {
-        let head = head.unwrap();
-        let mut flags = Vec::new();
-
-        if head.has_flag(HeadFlag::Compression) {
-            flags.push(HeadFlag::Compression);
-        }
-
-        if head.has_flag(HeadFlag::Unsynchronisation) {
-            flags.push(HeadFlag::Unsynchronisation);
-        }
-
-        Some(Head {
-            version: head.version.to_string(),
-            flags: if flags.len() > 0 { Some(flags) } else { None },
-        })
-    } else {
-        None
+    let mut simple = Simple {
+        file: file,
+        version: None,
+        frames: None,
+        frame1: None,
     };
 
-    let frames = if frames.is_some() {
-        let frames = frames.unwrap()
-            .into_iter()
-            .fold(Vec::new(), |mut vec, frame| {
-                let frame = match frame {
-                    (FrameHeader::V22(_), fbody) => {
-                        Frame {
-                            flags: None,
-                            body: fbody,
-                        }
-                    }
-                    (FrameHeader::V23(fhead), fbody) => {
-                        let mut flags = Vec::new();
+    for unit in reader.unwrap() {
+        match unit {
+            Unit::Header(head) => {
+                simple.version = Some(head.version.to_string());
+            }
+            Unit::FrameV2(fhead, _) => {
+                if simple.frames.is_none() {
+                    simple.frames = Some(vec![]);
+                }
 
-                        if fhead.has_flag(FrameHeaderFlag::Compression) {
-                            flags.push(FrameHeaderFlag::Compression);
-                        }
+                match simple.frames {
+                    Some(ref mut f) => f.push(fhead.id()),
+                    _ => {}
+                };
+            }
+            Unit::FrameV1(frame) => {
+                let map = frame1_to_map(&frame);
+                let frame1 = map.keys().map(|k| k.to_string()).collect::<Vec<_>>();
+                simple.frame1 = Some(frame1);
+            }
+            _ => {}
+        }
+    }
 
-                        if fhead.has_flag(FrameHeaderFlag::Encryption) {
-                            flags.push(FrameHeaderFlag::Encryption);
-                        }
+    Some(simple)
+}
 
-                        if fhead.has_flag(FrameHeaderFlag::FileAlter) {
-                            flags.push(FrameHeaderFlag::FileAlter);
-                        }
+fn all<'a>(file: &'a str, match_filter: &Box<Fn(String, &FrameBody) -> bool>) -> Option<All<'a>> {
+    fn filter_body(_body: FrameBody) -> FrameBody {
+        match _body {
+            FrameBody::PIC(ref body) => {
+                FrameBody::PIC(PIC {
+                    text_encoding: body.text_encoding.clone(),
+                    image_format: body.image_format.clone(),
+                    picture_type: body.picture_type.clone(),
+                    description: body.description.clone(),
+                    picture_data: Vec::new(),
+                })
+            }
+            FrameBody::APIC(ref body) => {
+                FrameBody::APIC(APIC {
+                    text_encoding: body.text_encoding.clone(),
+                    mime_type: body.mime_type.clone(),
+                    picture_type: body.picture_type.clone(),
+                    description: body.description.clone(),
+                    picture_data: Vec::new(),
+                })
+            }
+            _ => _body,
+        }
+    }
 
-                        if fhead.has_flag(FrameHeaderFlag::GroupIdentity) {
-                            flags.push(FrameHeaderFlag::GroupIdentity);
-                        }
+    let reader = Reader::new(file);
 
-                        if fhead.has_flag(FrameHeaderFlag::ReadOnly) {
-                            flags.push(FrameHeaderFlag::ReadOnly);
-                        }
+    if reader.is_err() {
+        return None;
+    }
 
-                        if fhead.has_flag(FrameHeaderFlag::TagAlter) {
-                            flags.push(FrameHeaderFlag::TagAlter);
-                        }
+    let mut all = All {
+        file: file,
+        head: None,
+        frames: None,
+        frame1: None,
+    };
 
-                        Frame {
+    for unit in reader.unwrap() {
+        match unit {
+            Unit::Header(head) => {
+                let mut flags = Vec::new();
+
+                if head.has_flag(HeadFlag::Compression) {
+                    flags.push(HeadFlag::Compression);
+                }
+
+                if head.has_flag(HeadFlag::Unsynchronisation) {
+                    flags.push(HeadFlag::Unsynchronisation);
+                }
+
+                all.head = Some(ViewHead {
+                    version: head.version.to_string(),
+                    flags: if flags.len() > 0 { Some(flags) } else { None },
+                });
+            }
+            Unit::FrameV2(fhead, fbody) => {
+                if all.frames.is_none() {
+                    all.frames = Some(vec![]);
+                }
+
+                let mut flags = Vec::new();
+
+                if fhead.has_flag(FrameHeaderFlag::Compression) {
+                    flags.push(FrameHeaderFlag::Compression);
+                }
+
+                if fhead.has_flag(FrameHeaderFlag::Encryption) {
+                    flags.push(FrameHeaderFlag::Encryption);
+                }
+
+                if fhead.has_flag(FrameHeaderFlag::FileAlter) {
+                    flags.push(FrameHeaderFlag::FileAlter);
+                }
+
+                if fhead.has_flag(FrameHeaderFlag::GroupIdentity) {
+                    flags.push(FrameHeaderFlag::GroupIdentity);
+                }
+
+                if fhead.has_flag(FrameHeaderFlag::ReadOnly) {
+                    flags.push(FrameHeaderFlag::ReadOnly);
+                }
+
+                if fhead.has_flag(FrameHeaderFlag::TagAlter) {
+                    flags.push(FrameHeaderFlag::TagAlter);
+                }
+
+                if fhead.has_flag(FrameHeaderFlag::DataLength) {
+                    flags.push(FrameHeaderFlag::DataLength);
+                }
+
+                if fhead.has_flag(FrameHeaderFlag::Unsynchronisation) {
+                    flags.push(FrameHeaderFlag::Unsynchronisation);
+                }
+
+                match all.frames {
+                    Some(ref mut frames) => {
+                        frames.push(ViewFrame {
                             flags: if flags.len() > 0 { Some(flags) } else { None },
                             body: filter_body(fbody),
-                        }
+                        });
                     }
-                    (FrameHeader::V24(fhead), fbody) => {
-                        let mut flags = Vec::new();
-
-                        if fhead.has_flag(FrameHeaderFlag::Compression) {
-                            flags.push(FrameHeaderFlag::Compression);
-                        }
-
-                        if fhead.has_flag(FrameHeaderFlag::Encryption) {
-                            flags.push(FrameHeaderFlag::Encryption);
-                        }
-
-                        if fhead.has_flag(FrameHeaderFlag::FileAlter) {
-                            flags.push(FrameHeaderFlag::FileAlter);
-                        }
-
-                        if fhead.has_flag(FrameHeaderFlag::GroupIdentity) {
-                            flags.push(FrameHeaderFlag::GroupIdentity);
-                        }
-
-                        if fhead.has_flag(FrameHeaderFlag::ReadOnly) {
-                            flags.push(FrameHeaderFlag::ReadOnly);
-                        }
-
-                        if fhead.has_flag(FrameHeaderFlag::TagAlter) {
-                            flags.push(FrameHeaderFlag::TagAlter);
-                        }
-
-                        if fhead.has_flag(FrameHeaderFlag::DataLength) {
-                            flags.push(FrameHeaderFlag::DataLength);
-                        }
-
-                        if fhead.has_flag(FrameHeaderFlag::Unsynchronisation) {
-                            flags.push(FrameHeaderFlag::Unsynchronisation);
-                        }
-
-                        Frame {
-                            flags: if flags.len() > 0 { Some(flags) } else { None },
-                            body: filter_body(fbody),
-                        }
-                    }
+                    _ => {}
                 };
 
-                vec.push(frame);
-
-                vec
-            });
-
-        if frames.len() > 0 { Some(frames) } else { None }
-    } else {
-        None
-    };
-
-    Some(All {
-        file: file,
-        head: head,
-        frames: frames,
-        frame1: frame1,
-    })
-}
-
-fn simple<'a>(file: &'a str, filter: &Vec<&str>, not_filter: &Vec<&str>) -> Option<Simple<'a>> {
-    let collected = collect(file, filter, not_filter);
-
-    if collected.is_none() {
-        return None;
+            }
+            Unit::FrameV1(frame) => {
+                all.frame1 = Some(frame);
+            }
+            _ => (),
+        }
     }
 
-    let (head, frames, frame1) = collected.unwrap();
+    Some(all)
+}
 
-    let version = if head.is_some() {
-        Some(head.unwrap().version.to_string())
-    } else {
-        None
-    };
+fn match_expr(exp: &str) -> Box<Fn(String, &FrameBody) -> bool> {
+    use std::str::Chars;
 
-    let frame_ids = if frames.is_some() {
-        Some(frames.unwrap()
-            .into_iter()
-            .map(|(fhead, _)| match fhead {
-                FrameHeader::V22(fhead) => fhead.id,
-                FrameHeader::V23(fhead) => fhead.id,
-                FrameHeader::V24(fhead) => fhead.id,
+    fn take_token(chars: &mut Chars) -> (char, String) {
+        let mut tk = ' ';
+        let value = chars.take_while(|ch| match ch {
+                &'!' | &'^' | &'=' | &'~' | &'$' | &'.' | &'(' | &')' | &'&' | &'|' | &' ' => {
+                    tk = *ch;
+                    false
+                }
+                _ => true,
             })
-            .collect::<Vec<String>>())
-    } else {
-        None
-    };
+            .collect();
 
-    let frame1_ids = if frame1.is_some() {
-        let frame = frame1.unwrap();
+        (tk, value)
+    }
 
-        let mut ret = Vec::new();
-        if !frame.album.is_empty() {
-            ret.push("album".to_string());
+    fn take_value(tk: char, chars: &mut Chars) -> String {
+        chars.take_while(|ch| *ch != tk).collect()
+    }
+
+    let mut tokens: Vec<String> = Vec::new();
+    let mut chars = exp.chars();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' | '\'' => {
+                let v = take_value(ch, &mut chars);
+                tokens.push(v);
+            }
+            '!' | '^' | '=' | '~' | '$' | '.' | '(' | ')' | '&' | '|' => {
+                tokens.push(ch.to_string());
+            }
+            ' ' => {
+                //
+            }
+            _ => {
+                let (tk, value) = take_token(&mut chars);
+                let mut r = ch.to_string();
+                r.push_str(value.as_str());
+                tokens.push(r);
+                if tk != ' ' {
+                    tokens.push(tk.to_string());
+                }
+            }
         }
-        if !frame.artist.is_empty() {
-            ret.push("artist".to_string());
+    }
+
+    let mut iter = tokens.iter();
+    let mut stack = Vec::new();
+    let mut ordered = Vec::new();
+
+    #[derive(Debug)]
+    enum Tk {
+        Del(String),
+        MatchId(String),
+        NotMatchId(String),
+        Prop(String, String), //id, prop
+        Value(String),
+    }
+
+    while let Some(token) = iter.next() {
+        match token.as_str() {
+            "!" | "^" | "=" | "~" | "$" | "." | "(" | "&" | "|" => {
+                stack.push(Tk::Del(token.clone()))
+            }
+            ")" => {
+                while let Some(tk) = stack.pop() {
+                    match tk {
+                        Tk::Del(ref v) if v == "(" => break,
+                        _ => {
+                            ordered.push(tk);
+                        }
+                    };
+                }
+            }
+            _ => {
+                match stack.pop() {
+                    Some(Tk::Del(ref tk)) if tk.as_str() == "." => {
+                        match stack.pop() {
+                            Some(Tk::MatchId(ref id)) => {
+                                stack.push(Tk::Prop(id.clone(), token.clone()));
+                            }
+                            _ => {
+                                panic!("\n\n---------------------\n\
+                                The property token \".\" is only allowed at Id token. \
+                                ex) TIT1.text\n---------------------\n\n");
+                            }
+                        }
+                    }
+                    Some(Tk::Del(ref tk)) if tk.as_str() == "!" || tk.as_str() == "^" ||
+                                             tk.as_str() == "=" ||
+                                             tk.as_str() == "~" ||
+                                             tk.as_str() == "$" => {
+
+                        let is_prop = if let Some(&Tk::Prop(_, _)) = stack.last() {
+                            true
+                        } else {
+                            false
+                        };
+
+                        if is_prop {
+                            stack.push(Tk::Del(tk.clone()));
+                            stack.push(Tk::Value(token.clone()));
+                        } else if tk.as_str() == "!" {
+                            stack.push(Tk::NotMatchId(token.clone()));
+                        } else {
+                            stack.push(Tk::MatchId(token.clone()));
+                        }
+                    }
+                    None => {
+                        stack.push(Tk::MatchId(token.clone()));
+                    }
+                    last @ _ => {
+                        stack.push(last.unwrap());
+                        stack.push(Tk::MatchId(token.clone()));
+                    }
+                }
+            }
         }
-        if !frame.comment.is_empty() {
-            ret.push("comment".to_string());
-        }
-        if !frame.genre.is_empty() {
-            ret.push("genre".to_string());
-        }
-        if !frame.title.is_empty() {
-            ret.push("title".to_string());
-        }
-        if !frame.track.is_empty() {
-            ret.push("track".to_string());
-        }
-        if !frame.year.is_empty() {
-            ret.push("year".to_string());
+    }
+
+    while let Some(tk) = stack.pop() {
+        ordered.insert(0, tk);
+    }
+
+    Box::new(move |id, frame_body| {
+
+        fn calc_result(op_stack: &mut Vec<&str>, results: &mut Vec<bool>, result: bool) {
+            match op_stack.pop() {
+                Some(op) => {
+                    match op {
+                        "|" => {
+                            match results.pop() {
+                                Some(r) => results.push(r || result),
+                                _ => results.push(result)
+                            }
+                        }
+                        _ => {
+                            match results.pop() {
+                                Some(r) => results.push(r && result),
+                                _ => results.push(result)
+                            }
+                        }
+                    }
+                },
+                _ => {
+                    match results.pop() {
+                        Some(r) => results.push(r && result),
+                        _ => results.push(result)
+                    }
+                }
+            };
         }
 
-        Some(ret)
-    } else {
-        None
-    };
+        let properties = frame_body.to_map();
+        if properties.is_err()  {
+            return false;
+        }
 
-    Some(Simple {
-        file: file,
-        version: version,
-        frames: frame_ids,
-        frame1: frame1_ids,
+        let properties = properties.unwrap();
+        let keys: HashSet<String> = properties.keys().map(|k| k.to_string()).collect();
+
+        let mut results: Vec<bool> = Vec::new();
+        let mut op_stack: Vec<&str> = Vec::new();
+
+        let mut iter = ordered.iter();
+        while let Some(token) = iter.next() {
+
+            match token {
+                &Tk::Prop(ref match_id, ref prop) => {
+
+                    let op = iter.next();
+                    let op = if let Some(&Tk::Del(ref op)) = op {
+                        op.clone()
+                    } else {
+                        String::new()
+                    };
+
+                    let value = iter.next();
+                    let value = if let Some(&Tk::Value(ref value)) = value {
+                        value.clone()
+                    } else {
+                        String::new()
+                    };
+
+                    if op == "" || match_id == "" {
+                        panic!("\n\n---------------------\n\
+                                \"<id>.<property> (=!~$) <value>\" \
+                                ex) TIT1.text~\"Dio Live\"\n---------------------\n\n");
+                    }
+
+                    let result = match_id == &id && match properties.get(prop.as_str()) {
+                        Some(v) => {
+                            match op.as_str() {
+                                "=" => &value == v,
+                                "~" => v.contains(value.as_str()),
+                                "^" => v.starts_with(value.as_str()),
+                                "$" => v.ends_with(value.as_str()),
+                                _ => false
+                            }
+                        },
+                        None => false
+                    };
+
+                    calc_result(&mut op_stack, &mut results, result);
+                }
+                &Tk::MatchId(ref match_id) => {
+                    calc_result(&mut op_stack, &mut results, &id == match_id);
+                }
+                &Tk::NotMatchId(ref match_id) => {
+                    calc_result(&mut op_stack, &mut results, !keys.contains(match_id));
+                }
+                &Tk::Del(ref tk) => {
+                    op_stack.push(tk);
+                }
+                _ => {}
+            };
+        };
+
+        if results.len() != 1 {
+            false
+        } else {
+            results[0]
+        }
     })
-}
-
-fn json(format: Format, files: Vec<&str>, filter: &Vec<&str>, not_filter: &Vec<&str>) {
-    let start = PreciseTime::now();
-    println!("[");
-    for file in files {
-        match format {
-            Format::Simple => {
-                if let Some(s) = simple(file, filter, not_filter) {
-                    let json_str = match serde_json::to_string(&s) {
-                        Ok(s) => s,
-                        _ => "{\"err\": \"\"}".to_string(),
-                    };
-                    println!("{},", json_str);
-                }
-            }
-            Format::SuperSimple => {
-                if let Some(_) = simple(file, filter, not_filter) {
-                    println!("\"{}\",", file);
-                }
-            }
-            _ => {
-                if let Some(s) = all(file, filter, not_filter) {
-                    let json_str = match serde_json::to_string(&s) {
-                        Ok(s) => s,
-                        _ => "{\"err\": \"\"}".to_string(),
-                    };
-
-                    println!("{},", json_str);
-                }
-            }
-        };
-    }
-    println!("\"{}\"", start.to(PreciseTime::now()));
-    println!("]");
-}
-
-fn text(format: Format, files: Vec<&str>, filter: &Vec<&str>, not_filter: &Vec<&str>) {
-    let start = PreciseTime::now();
-    for file in files {
-        match format {
-            Format::Simple => {
-                if let Some(s) = simple(file, filter, not_filter) {
-                    println!("{}", s);
-                }
-            }
-            Format::SuperSimple => {
-                if let Some(_) = simple(file, filter, not_filter) {
-                    println!("\"{}\"", file);
-                }
-            }
-            _ => {
-                if let Some(s) = all(file, filter, not_filter) {
-                    println!("{}", s);
-                }
-            }
-        };
-    }
-    println!("{}", start.to(PreciseTime::now()));
-}
-
-#[derive(Debug)]
-enum Format {
-    Simple,
-    SuperSimple,
-    All,
 }
 
 fn main() {
@@ -475,51 +531,84 @@ fn main() {
         .author("Changseok Han <freestrings@gmail.com>")
         .args_from_usage("<INPUT>... 'mp3 file pathes. ex) ./automarkddang file1 file2'
                           \
-                          -t --text 'print as text format. if not given, print as json'
-                          -s... --simple 'print as simple imformation. if not given, print all'
-                          -m \
-                          --match=[MATCH] 'it find to match id. and it support comma \
-                          seperated multiple id ex) -m TIT2,TALB and !(not) operator also. -m !T'
+                          -f --format=[FORMAT] 'default value is text. (t|tt|j|jj|f) t=simple \
+                          text, tt=text, j=simple json, jj=json, f=file'
+                          \
+                          -m --match=[MATCH] 'it find to match id. and it support comma \
+                          seperated multiple id ex) -m TIT2,TALB and !(not) operator also. -m \
+                          !T'
             ")
         .get_matches();
 
     let files: Vec<_> = matches.values_of("INPUT").unwrap().collect();
 
-    let filter: Vec<&str> = if matches.is_present("match") {
-        let id_str = matches.value_of("match").unwrap();
-        id_str.split(",").collect()
-    } else {
-        Vec::new()
+    let format = matches.value_of("format");
+
+    let match_exec: Box<Fn(String, &FrameBody) -> bool> = match matches.value_of("match") {
+        Some(expr) => match_expr(expr),
+        _ => Box::new(|String, frame_body| true),
     };
 
-    let not_filter: Vec<&str> = filter.clone()
-        .iter()
-        .filter(|i| i.find("!") == Some(0))
-        .map(|i| {
-            let (_, last) = i.split_at(1);
-            last
-        })
-        .collect();
+    let start = PreciseTime::now();
 
-    let filter: Vec<&str> = filter.iter()
-        .filter(|i| i.find("!") == None)
-        .map(|i| *i)
-        .collect();
-
-    let mut format = if matches.is_present("simple") {
-        Format::Simple
-    } else {
-        Format::All
+    match format {
+        Some("j") | Some("jj") => {
+            println!("[");
+        }
+        _ => {}
     };
 
-    if matches.occurrences_of("simple") > 1 {
-        format = Format::SuperSimple
+    for file in files {
+        match format {
+            Some("t") => {
+                match simple(file, &match_exec) {
+                    Some(s) => println!("{}", s),
+                    _ => {}
+                };
+            }
+            Some("tt") => {
+                match all(file, &match_exec) {
+                    Some(a) => println!("{}", a),
+                    _ => {}
+                };
+            }
+            Some("j") => {
+                match simple(file, &match_exec) {
+                    Some(a) => {
+                        let json_str = match serde_json::to_string(&a) {
+                            Ok(s) => s,
+                            _ => "{\"err\": \"\"}".to_string(),
+                        };
+                        println!("\t{},", json_str);
+                    }
+                    _ => {}
+                };
+            }
+            Some("jj") => {
+                match all(file, &match_exec) {
+                    Some(a) => {
+                        let json_str = match serde_json::to_string(&a) {
+                            Ok(s) => s,
+                            _ => "{\"err\": \"\"}".to_string(),
+                        };
+                        println!("\t{},", json_str);
+                    }
+                    _ => {}
+                };
+            }
+            Some("f") => {}
+            _ => {}
+        };
     }
 
-    if matches.is_present("text") {
-        text(format, files, &filter, &not_filter);
-    } else {
-        json(format, files, &filter, &not_filter);
-    }
-
+    match format {
+        Some("t") | Some("tt") => {
+            println!("{}", start.to(PreciseTime::now()));
+        }
+        Some("j") | Some("jj") => {
+            println!("\t\"{}\"", start.to(PreciseTime::now()));
+            println!("]");
+        }
+        _ => {}
+    };
 }
