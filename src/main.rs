@@ -13,9 +13,10 @@ use rtag::frame::*;
 use rtag::frame::types::*;
 use time::PreciseTime;
 
+use std::boxed::Box;
+use std::collections::HashMap;
+use std::cell::RefCell;
 use std::fmt;
-use std::str;
-use std::collections::{HashMap, HashSet};
 
 #[derive(Serialize)]
 struct All<'a> {
@@ -140,7 +141,22 @@ fn frame1_to_map(frame: &Frame1) -> HashMap<&str, String> {
     ret
 }
 
-fn simple<'a>(file: &'a str, match_filter: &Box<Fn(String, &FrameBody) -> bool>) -> Option<Simple<'a>> {
+fn framebody_to_map<'a>(fbody: &FrameBody) -> HashMap<&'a str, String> {
+    let map: Box<RefCell<HashMap<&'a str, String>>> = Box::new(RefCell::new(HashMap::new()));
+
+    fbody.inside(|key, value| {
+        let mut m = map.borrow_mut();
+        m.insert(unsafe { std::mem::transmute_copy(&key) }, value);
+        true
+    });
+
+    let m = map.borrow_mut();
+    m.clone()
+}
+
+fn simple<'a>(file: &'a str,
+              match_filter: &Box<Fn(HashMap<String, HashMap<&str, String>>) -> bool>)
+              -> Option<Simple<'a>> {
     let reader = Reader::new(file);
 
     if reader.is_err() {
@@ -154,12 +170,17 @@ fn simple<'a>(file: &'a str, match_filter: &Box<Fn(String, &FrameBody) -> bool>)
         frame1: None,
     };
 
+    let mut bodies: HashMap<String, HashMap<&str, String>> = HashMap::new();
+
     for unit in reader.unwrap() {
         match unit {
             Unit::Header(head) => {
                 simple.version = Some(head.version.to_string());
             }
-            Unit::FrameV2(fhead, _) => {
+            Unit::FrameV2(ref fhead, ref fbody) => {
+
+                bodies.insert(fhead.id(), framebody_to_map(fbody));
+
                 if simple.frames.is_none() {
                     simple.frames = Some(vec![]);
                 }
@@ -178,10 +199,17 @@ fn simple<'a>(file: &'a str, match_filter: &Box<Fn(String, &FrameBody) -> bool>)
         }
     }
 
-    Some(simple)
+    if match_filter(bodies) {
+        Some(simple)
+    } else {
+        None
+    }
+
 }
 
-fn all<'a>(file: &'a str, match_filter: &Box<Fn(String, &FrameBody) -> bool>) -> Option<All<'a>> {
+fn all<'a>(file: &'a str,
+           match_filter: &Box<Fn(HashMap<String, HashMap<&str, String>>) -> bool>)
+           -> Option<All<'a>> {
     fn filter_body(_body: FrameBody) -> FrameBody {
         match _body {
             FrameBody::PIC(ref body) => {
@@ -219,6 +247,8 @@ fn all<'a>(file: &'a str, match_filter: &Box<Fn(String, &FrameBody) -> bool>) ->
         frame1: None,
     };
 
+    let mut bodies: HashMap<String, HashMap<&str, String>> = HashMap::new();
+
     for unit in reader.unwrap() {
         match unit {
             Unit::Header(head) => {
@@ -238,6 +268,9 @@ fn all<'a>(file: &'a str, match_filter: &Box<Fn(String, &FrameBody) -> bool>) ->
                 });
             }
             Unit::FrameV2(fhead, fbody) => {
+
+                bodies.insert(fhead.id(), framebody_to_map(&fbody));
+
                 if all.frames.is_none() {
                     all.frames = Some(vec![]);
                 }
@@ -294,10 +327,14 @@ fn all<'a>(file: &'a str, match_filter: &Box<Fn(String, &FrameBody) -> bool>) ->
         }
     }
 
-    Some(all)
+    if match_filter(bodies) {
+        Some(all)
+    } else {
+        None
+    }
 }
 
-fn match_expr(exp: &str) -> Box<Fn(String, &FrameBody) -> bool> {
+fn match_expr(exp: &str) -> Box<Fn(HashMap<String, HashMap<&str, String>>) -> bool> {
     use std::str::Chars;
 
     fn take_token(chars: &mut Chars) -> (char, String) {
@@ -423,42 +460,34 @@ fn match_expr(exp: &str) -> Box<Fn(String, &FrameBody) -> bool> {
         ordered.insert(0, tk);
     }
 
-    Box::new(move |id, frame_body| {
+    fn or(results: &mut Vec<bool>, result: bool) {
+        match results.pop() {
+            Some(r) => results.push(r || result),
+            _ => results.push(result),
+        };
+    }
 
-        fn calc_result(op_stack: &mut Vec<&str>, results: &mut Vec<bool>, result: bool) {
-            match op_stack.pop() {
-                Some(op) => {
-                    match op {
-                        "|" => {
-                            match results.pop() {
-                                Some(r) => results.push(r || result),
-                                _ => results.push(result)
-                            }
-                        }
-                        _ => {
-                            match results.pop() {
-                                Some(r) => results.push(r && result),
-                                _ => results.push(result)
-                            }
-                        }
-                    }
-                },
-                _ => {
-                    match results.pop() {
-                        Some(r) => results.push(r && result),
-                        _ => results.push(result)
-                    }
+    fn and(results: &mut Vec<bool>, result: bool) {
+        match results.pop() {
+            Some(r) => results.push(r && result),
+            _ => results.push(result),
+        };
+    }
+
+    fn calc_result(op_stack: &mut Vec<&str>, results: &mut Vec<bool>, result: bool) {
+
+        match op_stack.pop() {
+            Some(op) => {
+                match op {
+                    "|" => or(results, result),
+                    _ => and(results, result),
                 }
-            };
-        }
+            }
+            _ => and(results, result),
+        };
+    }
 
-        let properties = frame_body.to_map();
-        if properties.is_err()  {
-            return false;
-        }
-
-        let properties = properties.unwrap();
-        let keys: HashSet<String> = properties.keys().map(|k| k.to_string()).collect();
+    Box::new(move |frame_bodies| {
 
         let mut results: Vec<bool> = Vec::new();
         let mut op_stack: Vec<&str> = Vec::new();
@@ -467,7 +496,7 @@ fn match_expr(exp: &str) -> Box<Fn(String, &FrameBody) -> bool> {
         while let Some(token) = iter.next() {
 
             match token {
-                &Tk::Prop(ref match_id, ref prop) => {
+                &Tk::Prop(ref id, ref prop) => {
 
                     let op = iter.next();
                     let op = if let Some(&Tk::Del(ref op)) = op {
@@ -483,39 +512,44 @@ fn match_expr(exp: &str) -> Box<Fn(String, &FrameBody) -> bool> {
                         String::new()
                     };
 
-                    if op == "" || match_id == "" {
+                    if op == "" || id == "" {
                         panic!("\n\n---------------------\n\
                                 \"<id>.<property> (=!~$) <value>\" \
                                 ex) TIT1.text~\"Dio Live\"\n---------------------\n\n");
                     }
 
-                    let result = match_id == &id && match properties.get(prop.as_str()) {
-                        Some(v) => {
-                            match op.as_str() {
-                                "=" => &value == v,
-                                "~" => v.contains(value.as_str()),
-                                "^" => v.starts_with(value.as_str()),
-                                "$" => v.ends_with(value.as_str()),
-                                _ => false
+                    let result = match frame_bodies.get(id) {
+                        Some(fb) => {
+                            match fb.get(prop.as_str()) {
+                                Some(v) => {
+                                    match op.as_str() {
+                                        "=" => &value == v,
+                                        "~" => v.contains(value.as_str()),
+                                        "^" => v.starts_with(value.as_str()),
+                                        "$" => v.ends_with(value.as_str()),
+                                        _ => false,
+                                    }
+                                }
+                                None => false,
                             }
-                        },
-                        None => false
+                        }
+                        None => false,
                     };
 
                     calc_result(&mut op_stack, &mut results, result);
                 }
-                &Tk::MatchId(ref match_id) => {
-                    calc_result(&mut op_stack, &mut results, &id == match_id);
+                &Tk::MatchId(ref id) => {
+                    calc_result(&mut op_stack, &mut results, frame_bodies.get(id).is_some());
                 }
-                &Tk::NotMatchId(ref match_id) => {
-                    calc_result(&mut op_stack, &mut results, !keys.contains(match_id));
+                &Tk::NotMatchId(ref id) => {
+                    calc_result(&mut op_stack, &mut results, frame_bodies.get(id).is_none());
                 }
                 &Tk::Del(ref tk) => {
                     op_stack.push(tk);
                 }
                 _ => {}
             };
-        };
+        }
 
         if results.len() != 1 {
             false
@@ -544,10 +578,11 @@ fn main() {
 
     let format = matches.value_of("format");
 
-    let match_exec: Box<Fn(String, &FrameBody) -> bool> = match matches.value_of("match") {
-        Some(expr) => match_expr(expr),
-        _ => Box::new(|String, frame_body| true),
-    };
+    let match_exec: Box<Fn(HashMap<String, HashMap<&str, String>>) -> bool> =
+        match matches.value_of("match") {
+            Some(expr) => match_expr(expr),
+            _ => Box::new(|_| true),
+        };
 
     let start = PreciseTime::now();
 
