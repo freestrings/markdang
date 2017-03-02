@@ -495,7 +495,7 @@ fn match_expr(exp: &str) -> Box<Fn(HashMap<String, HashMap<&str, String>>) -> bo
         let mut results: Vec<bool> = Vec::new();
         let mut op_stack: Vec<&str> = Vec::new();
 
-        debug!("{:?}", ordered);
+        trace!("{:?}", ordered);
         let mut iter = ordered.iter();
         while let Some(token) = iter.next() {
             match token {
@@ -520,7 +520,7 @@ fn match_expr(exp: &str) -> Box<Fn(HashMap<String, HashMap<&str, String>>) -> bo
                                 \"<id>.<property> (=!~$) <value>\" \
                                 ex) TIT1.text~\"Dio Live\"\n---------------------\n\n");
                     }
-                    
+
                     let result = match frame_bodies.get(id) {
                         Some(fb) => {
                             match fb.get(prop.as_str()) {
@@ -591,6 +591,9 @@ fn main() {
     let start = PreciseTime::now();
 
     for file in files {
+
+        debug!("{}", file);
+
         match format {
             Some("t") => {
                 match simple(file, &match_exec) {
@@ -639,6 +642,6 @@ fn main() {
             _ => {}
         };
     }
-    
+
     println!("#{}", start.to(PreciseTime::now()));
 }
