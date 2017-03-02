@@ -1,4 +1,7 @@
 extern crate clap;
+#[macro_use]
+extern crate log;
+extern crate env_logger;
 extern crate rtag;
 extern crate time;
 
@@ -150,7 +153,7 @@ fn framebody_to_map<'a>(fbody: &FrameBody) -> HashMap<&'a str, String> {
         true
     });
 
-    let m = map.borrow_mut();
+    let m = map.borrow();
     m.clone()
 }
 
@@ -492,9 +495,9 @@ fn match_expr(exp: &str) -> Box<Fn(HashMap<String, HashMap<&str, String>>) -> bo
         let mut results: Vec<bool> = Vec::new();
         let mut op_stack: Vec<&str> = Vec::new();
 
+        debug!("{:?}", ordered);
         let mut iter = ordered.iter();
         while let Some(token) = iter.next() {
-
             match token {
                 &Tk::Prop(ref id, ref prop) => {
 
@@ -517,13 +520,14 @@ fn match_expr(exp: &str) -> Box<Fn(HashMap<String, HashMap<&str, String>>) -> bo
                                 \"<id>.<property> (=!~$) <value>\" \
                                 ex) TIT1.text~\"Dio Live\"\n---------------------\n\n");
                     }
-
+                    
                     let result = match frame_bodies.get(id) {
                         Some(fb) => {
                             match fb.get(prop.as_str()) {
                                 Some(v) => {
                                     match op.as_str() {
                                         "=" => &value == v,
+                                        "!" => &value != v,
                                         "~" => v.contains(value.as_str()),
                                         "^" => v.starts_with(value.as_str()),
                                         "$" => v.ends_with(value.as_str()),
@@ -560,17 +564,17 @@ fn match_expr(exp: &str) -> Box<Fn(HashMap<String, HashMap<&str, String>>) -> bo
 }
 
 fn main() {
+    env_logger::init().unwrap();
+
     let matches = App::new("automarkddang")
-        .version("0.1")
+        .version("0.2")
         .author("Changseok Han <freestrings@gmail.com>")
         .args_from_usage("<INPUT>... 'mp3 file pathes. ex) ./automarkddang file1 file2'
                           \
                           -f --format=[FORMAT] 'default value is text. (t|tt|j|jj|f) t=simple \
                           text, tt=text, j=simple json, jj=json, f=file'
                           \
-                          -m --match=[MATCH] 'it find to match id. and it support comma \
-                          seperated multiple id ex) -m TIT2,TALB and !(not) operator also. -m \
-                          !T'
+                          -m --match=[MATCH] 'it find to match id. ex) -m \"!APIC | TALB.text~\'Dio\'\" see more example at README.md'
             ")
         .get_matches();
 
@@ -585,13 +589,6 @@ fn main() {
         };
 
     let start = PreciseTime::now();
-
-    match format {
-        Some("j") | Some("jj") => {
-            println!("[");
-        }
-        _ => {}
-    };
 
     for file in files {
         match format {
@@ -610,11 +607,11 @@ fn main() {
             Some("j") => {
                 match simple(file, &match_exec) {
                     Some(a) => {
-                        let json_str = match serde_json::to_string(&a) {
+                        let json_str = match serde_json::to_string_pretty(&a) {
                             Ok(s) => s,
                             _ => "{\"err\": \"\"}".to_string(),
                         };
-                        println!("\t{},", json_str);
+                        println!("{},", json_str);
                     }
                     _ => {}
                 };
@@ -622,28 +619,26 @@ fn main() {
             Some("jj") => {
                 match all(file, &match_exec) {
                     Some(a) => {
-                        let json_str = match serde_json::to_string(&a) {
+                        let json_str = match serde_json::to_string_pretty(&a) {
                             Ok(s) => s,
                             _ => "{\"err\": \"\"}".to_string(),
                         };
-                        println!("\t{},", json_str);
+                        println!("//<");
+                        println!("{}", json_str);
+                        println!("//>");
                     }
                     _ => {}
                 };
             }
-            Some("f") => {}
+            Some("f") => {
+                match simple(file, &match_exec) {
+                    Some(_) => println!("{}", file),
+                    _ => {}
+                };
+            }
             _ => {}
         };
     }
-
-    match format {
-        Some("t") | Some("tt") => {
-            println!("{}", start.to(PreciseTime::now()));
-        }
-        Some("j") | Some("jj") => {
-            println!("\t\"{}\"", start.to(PreciseTime::now()));
-            println!("]");
-        }
-        _ => {}
-    };
+    
+    println!("#{}", start.to(PreciseTime::now()));
 }
