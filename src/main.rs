@@ -1,7 +1,9 @@
 extern crate clap;
+extern crate env_logger;
 #[macro_use]
 extern crate log;
-extern crate env_logger;
+extern crate hyper;
+extern crate regex;
 extern crate rtag;
 extern crate time;
 
@@ -10,46 +12,49 @@ extern crate serde_derive;
 extern crate serde_json;
 
 use clap::App;
+use regex::Regex;
 use rtag::metadata::MetadataReader as Reader;
+use rtag::metadata::MetadataWriter as Writer;
 use rtag::metadata::Unit;
 use rtag::frame::*;
 use rtag::frame::types::*;
 use time::PreciseTime;
 
 use std::boxed::Box;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::cell::RefCell;
+use std::path::{PathBuf, Path};
 use std::fmt;
 
-#[derive(Serialize)]
-struct All<'a> {
-    file: &'a str,
+#[derive(Debug, Serialize, Deserialize)]
+struct All {
+    file: String,
     head: Option<ViewHead>,
     frames: Option<Vec<ViewFrame>>,
     frame1: Option<Frame1>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct ViewHead {
     version: String,
     flags: Option<Vec<HeadFlag>>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct ViewFrame {
     flags: Option<Vec<FrameHeaderFlag>>,
     body: FrameBody,
 }
 
-#[derive(Serialize)]
-struct Simple<'a> {
-    file: &'a str,
+#[derive(Debug, Serialize)]
+struct Simple {
+    file: String,
     version: Option<String>,
     frames: Option<Vec<String>>,
     frame1: Option<Vec<String>>,
 }
 
-impl<'a> fmt::Display for All<'a> {
+impl fmt::Display for All {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let _ = write!(f, "{}\n", self.file);
 
@@ -86,7 +91,7 @@ impl<'a> fmt::Display for All<'a> {
     }
 }
 
-impl<'a> fmt::Display for Simple<'a> {
+impl fmt::Display for Simple {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let _ = write!(f, "{}, ", self.file);
 
@@ -157,17 +162,17 @@ fn framebody_to_map<'a>(fbody: &FrameBody) -> HashMap<&'a str, String> {
     m.clone()
 }
 
-fn simple<'a>(file: &'a str,
+fn simple<'a>(file: &'a Path,
               match_filter: &Box<Fn(HashMap<String, HashMap<&str, String>>) -> bool>)
-              -> Option<Simple<'a>> {
-    let reader = Reader::new(file);
+              -> Option<Simple> {
+    let reader = Reader::new(file.to_str().unwrap());
 
     if reader.is_err() {
         return None;
     }
 
     let mut simple = Simple {
-        file: file,
+        file: file.to_str().unwrap().to_string(),
         version: None,
         frames: None,
         frame1: None,
@@ -210,9 +215,9 @@ fn simple<'a>(file: &'a str,
 
 }
 
-fn all<'a>(file: &'a str,
+fn all<'a>(file: &'a Path,
            match_filter: &Box<Fn(HashMap<String, HashMap<&str, String>>) -> bool>)
-           -> Option<All<'a>> {
+           -> Option<All> {
     fn filter_body(_body: FrameBody) -> FrameBody {
         match _body {
             FrameBody::PIC(ref body) => {
@@ -237,14 +242,14 @@ fn all<'a>(file: &'a str,
         }
     }
 
-    let reader = Reader::new(file);
+    let reader = Reader::new(file.to_str().unwrap());
 
     if reader.is_err() {
         return None;
     }
 
     let mut all = All {
-        file: file,
+        file: file.to_str().unwrap().to_string(),
         head: None,
         frames: None,
         frame1: None,
@@ -563,21 +568,7 @@ fn match_expr(exp: &str) -> Box<Fn(HashMap<String, HashMap<&str, String>>) -> bo
     })
 }
 
-fn main() {
-    env_logger::init().unwrap();
-
-    let matches = App::new("automarkddang")
-        .version("0.2")
-        .author("Changseok Han <freestrings@gmail.com>")
-        .args_from_usage("<INPUT>... 'mp3 file pathes. ex) ./automarkddang file1 file2'
-                          \
-                          -f --format=[FORMAT] 'default value is text. (t|tt|j|jj|f) t=simple \
-                          text, tt=text, j=simple json, jj=json, f=file'
-                          \
-                          -m --match=[MATCH] 'it find to match id. ex) -m \"!APIC | TALB.text~\'Dio\'\" see more example at README.md'
-            ")
-        .get_matches();
-
+fn read(matches: clap::ArgMatches) {
     let files: Vec<_> = matches.values_of("INPUT").unwrap().collect();
 
     let format = matches.value_of("format");
@@ -592,56 +583,449 @@ fn main() {
 
     for file in files {
 
-        debug!("{}", file);
+        match PathBuf::from(file).canonicalize() {
+            Ok(path) => {
+                debug!("{:?}", path);
 
-        match format {
-            Some("t") => {
-                match simple(file, &match_exec) {
-                    Some(s) => println!("{}", s),
-                    _ => {}
-                };
-            }
-            Some("tt") => {
-                match all(file, &match_exec) {
-                    Some(a) => println!("{}", a),
-                    _ => {}
-                };
-            }
-            Some("j") => {
-                match simple(file, &match_exec) {
-                    Some(a) => {
-                        let json_str = match serde_json::to_string_pretty(&a) {
-                            Ok(s) => s,
-                            _ => "{\"err\": \"\"}".to_string(),
+                match format {
+                    Some("t") => {
+                        match simple(path.as_path(), &match_exec) {
+                            Some(s) => println!("{}", s),
+                            _ => {}
                         };
-                        println!("{},", json_str);
+                    }
+                    Some("tt") => {
+                        match all(path.as_path(), &match_exec) {
+                            Some(a) => println!("{}", a),
+                            _ => {}
+                        };
+                    }
+                    Some("j") => {
+                        match simple(path.as_path(), &match_exec) {
+                            Some(a) => {
+                                let json_str = match serde_json::to_string_pretty(&a) {
+                                    Ok(s) => s,
+                                    _ => "{\"err\": \"\"}".to_string(),
+                                };
+                                println!("{},", json_str);
+                            }
+                            _ => {}
+                        };
+                    }
+                    Some("jj") => {
+                        match all(path.as_path(), &match_exec) {
+                            Some(a) => {
+                                let json_str = match serde_json::to_string_pretty(&a) {
+                                    Ok(s) => s,
+                                    _ => "{\"err\": \"\"}".to_string(),
+                                };
+                                println!("//<");
+                                println!("{}", json_str);
+                                println!("//>");
+                            }
+                            _ => {}
+                        };
+                    }
+                    Some("f") => {
+                        match simple(path.as_path(), &match_exec) {
+                            Some(_) => println!("{}", file),
+                            _ => {}
+                        };
                     }
                     _ => {}
                 };
             }
-            Some("jj") => {
-                match all(file, &match_exec) {
-                    Some(a) => {
-                        let json_str = match serde_json::to_string_pretty(&a) {
-                            Ok(s) => s,
-                            _ => "{\"err\": \"\"}".to_string(),
-                        };
-                        println!("//<");
-                        println!("{}", json_str);
-                        println!("//>");
-                    }
-                    _ => {}
-                };
+            Err(e) => {
+                panic!("{:?}", e);
             }
-            Some("f") => {
-                match simple(file, &match_exec) {
-                    Some(_) => println!("{}", file),
-                    _ => {}
-                };
-            }
-            _ => {}
-        };
+        }
     }
 
     println!("#{}", start.to(PreciseTime::now()));
+}
+
+fn write(matches: clap::ArgMatches) {
+    let files: Vec<_> = matches.values_of("INPUT").unwrap().collect();
+
+    use std::fs::File;
+    use std::io::{self, BufReader, BufRead, Read};
+    use std::result;
+
+    use hyper::Url;
+    use hyper::Client;
+
+    use rtag::rw::Readable;
+
+    #[derive(Debug, Hash, PartialEq, Eq)]
+    enum WriteOption {
+        Clean,
+        None,
+    }
+
+    fn write(json_string: &String, options: &Option<HashSet<WriteOption>>) {
+        let all: result::Result<All, serde_json::Error> =
+            serde_json::from_str(json_string.as_str());
+
+        let mut all = match all {
+            Ok(all) => all,
+            Err(_) => panic!("\n\n=================>Invalid json: \n{}", json_string),
+        };
+
+        let result = match options {
+            &Some(ref options) => {
+                if options.contains(&WriteOption::Clean) {
+                    clean_write(&all)
+                } else {
+                    update(&mut all)
+                }
+            }
+            _ => update(&mut all),
+        };
+
+        match result {
+            Ok(_) => debug!("Write done {}", all.file),
+            Err(e) => warn!("Write err {:?}", e),
+        };
+    }
+
+    fn clean_write(all: &All) -> io::Result<()> {
+        let file = all.file.as_str();
+
+        debug!("clean write: {}", file);
+
+        let writer = Writer::new(file)?;
+        let frames: Vec<Unit> = match all.frames {
+            Some(ref frames) => {
+                let iter = frames.iter();
+
+                iter.map(|vf| {
+                        let mut frame_body = vf.body.clone();
+
+                        if let FrameBody::APIC(ref mut frame) = frame_body {
+                            match extract_url(&frame.description) {
+                                Some((replaced, extraced)) => {
+                                    match resource_to_bytes(extraced.as_str()) {
+                                        Some(bytes) => {
+                                            frame.description = replaced;
+                                            frame.picture_data = bytes;
+                                        }
+                                        _ => {}
+                                    };
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        let id = framebody_to_id(&frame_body, 4);
+
+                        Unit::FrameV2(FrameHeader::V24(FrameHeaderV4 {
+                                          id: id.to_string(),
+                                          size: 0,
+                                          status_flag: 0,
+                                          encoding_flag: 0,
+                                      }),
+                                      frame_body)
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+
+        writer.write(frames, true)
+    }
+
+    fn update(all: &mut All) -> io::Result<()> {
+        let file = all.file.as_str();
+
+        debug!("update write: {}", file);
+
+        let writer = Writer::new(file)?;
+
+        let (version, head_unit) = if let Some(ref vhead) = all.head {
+            let version: u8 = match vhead.version.parse() {
+                Ok(v) => v,
+                Err(_) => 4
+            };
+            
+            let mut head = Head {
+                tag_id: "ID3".to_string(),
+                version: version,
+                minor_version: 0,
+                flag: 0,
+                size: 0
+            };
+
+            match vhead.flags {
+                Some(ref flags) => {
+                    for flag in flags.clone() {
+                        head.set_flag(flag);
+                    }
+                },
+                _ => {}
+            };
+
+            (version, Unit::Header(head))
+        } else {
+            (4, Unit::Header(Head {
+                tag_id: "ID3".to_string(),
+                version: 4,
+                minor_version: 0,
+                flag: 0,
+                size: 0
+            }))
+        };
+
+        let mut frames: Vec<Unit> = match all.frames {
+            Some(ref frames) => {
+                let iter = frames.iter();
+
+                iter.map(|vf| {
+                        let mut frame_body = vf.body.clone();
+
+                        if let FrameBody::PIC(ref mut frame) = frame_body {
+                            match extract_url(&frame.description) {
+                                Some((replaced, extraced)) => {
+                                    match resource_to_bytes(extraced.as_str()) {
+                                        Some(bytes) => {
+                                            frame.description = replaced;
+                                            frame.picture_data = bytes;
+                                        }
+                                        _ => {}
+                                    };
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        if let FrameBody::APIC(ref mut frame) = frame_body {
+                            match extract_url(&frame.description) {
+                                Some((replaced, extraced)) => {
+                                    match resource_to_bytes(extraced.as_str()) {
+                                        Some(bytes) => {
+                                            frame.description = replaced;
+                                            frame.picture_data = bytes;
+                                        }
+                                        _ => {}
+                                    };
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        let id = framebody_to_id(&frame_body, version);
+
+                        let frame_head = match version {
+                            2 => FrameHeader::V22(FrameHeaderV2 {
+                                id: id.to_string(),
+                                size: 0
+                            }),
+                            3 => {
+                                let mut header = FrameHeader::V23(FrameHeaderV3 {
+                                    id: id.to_string(),
+                                    size: 0,
+                                    status_flag: 0,
+                                    encoding_flag: 0
+                                });
+
+                                match vf.flags {
+                                    Some(ref flags) => {
+                                        for flag in flags.clone() {
+                                            header.set_flag(flag);
+                                        }
+                                    },
+                                    _ => {}
+                                };
+
+                                header
+                            },
+                            _ => {
+                                let mut header = FrameHeader::V24(FrameHeaderV4 {
+                                    id: id.to_string(),
+                                    size: 0,
+                                    status_flag: 0,
+                                    encoding_flag: 0
+                                });
+                                
+                                match vf.flags {
+                                    Some(ref flags) => {
+                                        for flag in flags.clone() {
+                                            header.set_flag(flag);
+                                        }
+                                    },
+                                    _ => {}
+                                };
+
+                                header
+                            }
+                        };
+
+                        Unit::FrameV2(frame_head, frame_body)
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+
+        if let Some(ref frame1) = all.frame1 {
+            frames.push(Unit::FrameV1(frame1.clone()));
+        }
+
+        frames.insert(0, head_unit);
+
+        writer.write(frames, false)
+    }
+
+    fn extract_url(value: &String) -> Option<(String, String)> {
+        let re = Regex::new(r"#\{(.*)\}").unwrap();
+
+        re.captures(value.as_str()).and_then(|c| {
+            let cap = c.get(1).map_or("", |m| m.as_str());
+            Some((re.replace(value, "").into_owned(), cap.to_string()))
+        })
+    }
+
+    fn resource_to_bytes(cap_url: &str) -> Option<Vec<u8>> {
+
+        fn file(url: Url) -> Option<Vec<u8>> {
+            let path = match url.to_file_path() {
+                Ok(path) => path,
+                Err(e) => {
+                    error!("Invalid file path: {:?}", e);
+                    return None;
+                }
+            };
+
+            debug!("file: {:?}", path);
+
+            let mut fs = match File::open(path) {
+                Ok(fs) => fs,
+                Err(e) => {
+                    error!("Can not read a file: {:?}", e);
+                    return None;
+                }
+            };
+
+            match fs.all_bytes() {
+                Ok(bytes) => Some(bytes),
+                Err(e) => {
+                    error!("Unknown error: {:?}", e);
+                    None
+                }
+            }
+        }
+
+        fn http(url: Url) -> Option<Vec<u8>> {
+            debug!("http: '{}'", url);
+
+            let client = Client::new();
+            let mut response = match client.get(url).send() {
+                Ok(response) => response,
+                Err(e) => {
+                    error!("Can not send http request: {:?}", e);
+                    return None;
+                }
+            };
+
+            let mut buf = vec![0u8; 1024];
+            let mut dst = Vec::new();
+            while let Ok(read) = response.read(&mut buf) {
+                if read == 0 {
+                    break;
+                }
+                if read < buf.len() {
+                    dst.extend_from_slice(&buf[..read]);
+                } else {
+                    dst.extend_from_slice(&buf);
+                }
+            }
+
+            Some(dst)
+        }
+
+        debug!("resource: {}", cap_url);
+
+        let parsed_url = match Url::parse(cap_url) {
+            Ok(parsed_url) => parsed_url,
+            Err(_) => {
+                error!("Invalid url: {}", cap_url);
+                return None;
+            }
+        };
+
+        if parsed_url.scheme() == "http" || parsed_url.scheme() == "https" {
+            http(parsed_url)
+        } else {
+            file(parsed_url)
+        }
+
+    }
+
+    fn read_option<'a>(line: String) -> Option<HashSet<WriteOption>> {
+        let (_, write_option) = line.split_at(3);
+        let str_options: Vec<&str> = write_option.split_whitespace().collect();
+
+        let mut options: HashSet<WriteOption> = HashSet::new();
+        for option in str_options {
+            let write_option = match option.to_lowercase().as_str() {
+                "clean" => WriteOption::Clean,
+                _ => WriteOption::None,
+            };
+            options.insert(write_option);
+        }
+
+        Some(options)
+    }
+
+    for file in files {
+        trace!("{}", file);
+
+        let fs = match File::open(file) {
+            Ok(fs) => fs,
+            Err(_) => panic!("Can not open json file. {}", file),
+        };
+
+        let mut item = String::new();
+        let mut options: Option<HashSet<WriteOption>> = None;
+
+        let reader = BufReader::new(&fs);
+        for line in reader.lines() {
+            let line = line.unwrap();
+
+            if line.starts_with("//<") {
+                item.clear();
+                options = read_option(line);
+            } else if line.starts_with("//>") {
+                write(&item, &options);
+            } else {
+                item.push_str(line.as_str());
+                item.push_str("\n");
+            }
+        }
+
+    }
+}
+
+fn main() {
+    env_logger::init().unwrap();
+
+    let matches = App::new("markdang")
+        .version("0.2")
+        .author("Changseok Han <freestrings@gmail.com>")
+        .args_from_usage("<INPUT>... 'mp3 file pathes. ex) ./markdang file1 file2'
+                          \
+                          -f --format=[FORMAT] 'default value is text. (t|tt|j|jj|f) t=simple \
+                          text, tt=text, j=simple json, jj=json, f=file'
+                          \
+                          -m --match=[MATCH] 'it find to match id. ex) -m \"!APIC | \
+                          TALB.text~\'Dio\'\" see more example at README.md'
+
+                          -w --write 'write mode on'
+            ")
+        .get_matches();
+
+    if matches.is_present("write") {
+        write(matches);
+    } else {
+        read(matches);
+    }
 }

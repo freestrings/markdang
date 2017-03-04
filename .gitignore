@@ -1,6 +1,7 @@
 target
 Cargo.lock
 .cargo
+.markdang
 
 # Intellij
 .idea/

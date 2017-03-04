@@ -1,13 +1,17 @@
 [package]
-name = "automark"
+name = "markdang"
 version = "0.2.0"
 authors = ["Changseok Han <freestrings@gmail.com>"]
+license = "MIT"
+keywords = ["id3", "music", "mp3", "tagger"]
 
 [dependencies]
 clap = "2"
-rtag = "0.3.2"
-log = "0.3"
 env_logger = "0.3"
+hyper = "0.10"
+log = "0.3"
+regex = "0.2"
+rtag = "0.3.2"
 serde = "0.9"
 serde_derive = "0.9"
 serde_json = "0.9"
