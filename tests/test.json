@@ -1,0 +1,94 @@
+//<
+{
+  "file": "<absolute path>/tests/v1-v2.mp3",
+  "head": {
+    "version": "4",
+    "flags": null
+  },
+  "frames": [
+    {
+      "flags": null,
+      "body": {
+        "TIT2": {
+          "text_encoding": "UTF8",
+          "text": "타이틀"
+        }
+      }
+    },
+    {
+      "flags": null,
+      "body": {
+        "TPE1": {
+          "text_encoding": "ISO88591",
+          "text": "Artist"
+        }
+      }
+    },
+    {
+      "flags": null,
+      "body": {
+        "TALB": {
+          "text_encoding": "UTF8",
+          "text": "アルバム"
+        }
+      }
+    },
+    {
+      "flags": null,
+      "body": {
+        "TPE2": {
+          "text_encoding": "ISO88591",
+          "text": "Album Artist"
+        }
+      }
+    },
+    {
+      "flags": null,
+      "body": {
+        "TCON": {
+          "text_encoding": "ISO88591",
+          "text": "Heavy Metal"
+        }
+      }
+    },
+    {
+      "flags": null,
+      "body": {
+        "COMM": {
+          "text_encoding": "ISO88591",
+          "language": "eng",
+          "short_description": "",
+          "actual_text": "!@#$"
+        }
+      }
+    },
+    {
+      "flags": null,
+      "body": {
+        "TRCK": {
+          "text_encoding": "ISO88591",
+          "text": "1"
+        }
+      }
+    },
+    {
+      "flags": null,
+      "body": {
+        "TPOS": {
+          "text_encoding": "ISO88591",
+          "text": "0"
+        }
+      }
+    }
+  ],
+  "frame1": {
+    "title": "",
+    "artist": "Artist",
+    "album": "",
+    "year": "",
+    "comment": "!@#$",
+    "track": "1",
+    "genre": "137"
+  }
+}
+//>

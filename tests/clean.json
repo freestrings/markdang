@@ -1,0 +1,19 @@
+//<clean
+{
+  "file": "/home/han/Documents/works/git/markdang/tests/v1-v2.mp3",
+  "frames": [
+    {
+      "flags": null,
+      "body": {
+        "APIC": {
+          "text_encoding": "UTF8",
+          "mime_type": "image/jpeg",
+          "picture_type": "CoverFront",
+          "description": "Cover front of 'Sacred Heart'.#{http://image.bugsm.co.kr/album/images/original/1261/126183.jpg}",
+          "picture_data": []
+        }
+      }
+    }
+  ]
+}
+//>
