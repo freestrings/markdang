@@ -1,6 +1,7 @@
 # What
 
-`Markdang` is shell base application to read and to write a ID3 tag using **[rtag](https://github.com/freestrings/rtag) library**
+`Markdang` is shell base application to read and to write a ID3 tag. 
+- it based on **[rtag](https://github.com/freestrings/rtag) library**
 
 # Why
 
@@ -8,21 +9,45 @@ To learn rust!
 
 # Usage
 
-## Install Rust 
+## On Synology NAS
 
-[See install detail on rustlang site](https://www.rust-lang.org/en-US/install.html)
+### 1. Install docker on your local machine
+
+- https://docs.docker.com/engine/installation/
+
+
+### 2. Compile
+
+```bash
+$ git clone https://github.com/freestrings/markdang.git
+$ cd markdang
+$ docker run --rm -it -v "$PWD":/work freestrings/rust-build-armv7
+```
+
+### 3. Upload executalbe to synology NAS
+
+```bash
+scp -P 22 "$PWD/target/armv7-unknown-linux-gnueabihf/release/markdang" \
+    admin-user@your-host:/usr/local/bin/markdang
+```
+
+## On Local machine
+
+### 1. Install Rust
+
+- https://www.rust-lang.org/en-US/install.html
 
 ```bash
 $ curl https://sh.rustup.rs -sSf | sh
 ```
 
-## Compile and install
+### 2. Compile and install
 
 ```bash
 $ git clone https://github.com/freestrings/markdang.git
 $ cd markdang
 $ cargo build --release
-$ echo "export PATH=\"`pwd`/target/release:$PATH\"" > .markdang
+$ echo "export PATH=\"$PWD\"/target/release:$PATH\"" > .markdang
 $ source .markdang
 ```
 
