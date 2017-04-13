@@ -1,0 +1,16 @@
+//<clean
+{
+  "file": "",
+  "frames": [
+    {"body": { "APIC": {"text_encoding": "UTF8", "mime_type": "image/jpeg", "picture_type": "CoverFront", "picture_data": [], 
+        "description": "#{}"
+    }}},
+    {"body": { "TIT2": { "text_encoding": "UTF8", "text": ""}}},
+    {"body": { "TPE1": { "text_encoding": "UTF8", "text": ""}}},
+    {"body": { "TPE2": { "text_encoding": "UTF8", "text": ""}}},
+    {"body": { "TALB": { "text_encoding": "UTF8", "text": ""}}},
+    {"body": { "TDRC": { "text_encoding": "UTF8", "text": ""}}},
+    {"body": { "TRCK": { "text_encoding": "UTF8", "text": ""}}},
+  ]
+}
+//>
