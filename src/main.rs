@@ -3,6 +3,7 @@ extern crate env_logger;
 #[macro_use]
 extern crate log;
 extern crate hyper;
+extern crate hyper_native_tls;
 extern crate regex;
 extern crate rtag;
 extern crate time;
@@ -653,6 +654,8 @@ fn write(matches: clap::ArgMatches) {
 
     use hyper::Url;
     use hyper::Client;
+    use hyper::net::HttpsConnector;
+    use hyper_native_tls::NativeTlsClient;
 
     use rtag::rw::Readable;
 
@@ -668,7 +671,11 @@ fn write(matches: clap::ArgMatches) {
 
         let mut all = match all {
             Ok(all) => all,
-            Err(_) => panic!("\n\n=================>Invalid json: \n{}", json_string),
+            Err(e) => {
+                panic!("{:?}\n\n=================>Invalid json: \n{}",
+                       e,
+                       json_string)
+            }
         };
 
         let result = match options {
@@ -744,15 +751,15 @@ fn write(matches: clap::ArgMatches) {
         let (version, head_unit) = if let Some(ref vhead) = all.head {
             let version: u8 = match vhead.version.parse() {
                 Ok(v) => v,
-                Err(_) => 4
+                Err(_) => 4,
             };
-            
+
             let mut head = Head {
                 tag_id: "ID3".to_string(),
                 version: version,
                 minor_version: 0,
                 flag: 0,
-                size: 0
+                size: 0,
             };
 
             match vhead.flags {
@@ -760,19 +767,20 @@ fn write(matches: clap::ArgMatches) {
                     for flag in flags.clone() {
                         head.set_flag(flag);
                     }
-                },
+                }
                 _ => {}
             };
 
             (version, Unit::Header(head))
         } else {
-            (4, Unit::Header(Head {
-                tag_id: "ID3".to_string(),
-                version: 4,
-                minor_version: 0,
-                flag: 0,
-                size: 0
-            }))
+            (4,
+             Unit::Header(Head {
+                 tag_id: "ID3".to_string(),
+                 version: 4,
+                 minor_version: 0,
+                 flag: 0,
+                 size: 0,
+             }))
         };
 
         let mut frames: Vec<Unit> = match all.frames {
@@ -815,16 +823,18 @@ fn write(matches: clap::ArgMatches) {
                         let id = framebody_to_id(&frame_body, version);
 
                         let frame_head = match version {
-                            2 => FrameHeader::V22(FrameHeaderV2 {
-                                id: id.to_string(),
-                                size: 0
-                            }),
+                            2 => {
+                                FrameHeader::V22(FrameHeaderV2 {
+                                    id: id.to_string(),
+                                    size: 0,
+                                })
+                            }
                             3 => {
                                 let mut header = FrameHeader::V23(FrameHeaderV3 {
                                     id: id.to_string(),
                                     size: 0,
                                     status_flag: 0,
-                                    encoding_flag: 0
+                                    encoding_flag: 0,
                                 });
 
                                 match vf.flags {
@@ -832,26 +842,26 @@ fn write(matches: clap::ArgMatches) {
                                         for flag in flags.clone() {
                                             header.set_flag(flag);
                                         }
-                                    },
+                                    }
                                     _ => {}
                                 };
 
                                 header
-                            },
+                            }
                             _ => {
                                 let mut header = FrameHeader::V24(FrameHeaderV4 {
                                     id: id.to_string(),
                                     size: 0,
                                     status_flag: 0,
-                                    encoding_flag: 0
+                                    encoding_flag: 0,
                                 });
-                                
+
                                 match vf.flags {
                                     Some(ref flags) => {
                                         for flag in flags.clone() {
                                             header.set_flag(flag);
                                         }
-                                    },
+                                    }
                                     _ => {}
                                 };
 
@@ -942,6 +952,36 @@ fn write(matches: clap::ArgMatches) {
             Some(dst)
         }
 
+        fn https(url: Url) -> Option<Vec<u8>> {
+            debug!("https: '{}'", url);
+            let ssl = NativeTlsClient::new().unwrap();
+            let connector = HttpsConnector::new(ssl);
+            let client = Client::with_connector(connector);
+
+            let mut response = match client.get(url).send() {
+                Ok(response) => response,
+                Err(e) => {
+                    error!("Can not send https request: {:?}", e);
+                    return None;
+                }
+            };
+
+            let mut buf = vec![0u8; 1024];
+            let mut dst = Vec::new();
+            while let Ok(read) = response.read(&mut buf) {
+                if read == 0 {
+                    break;
+                }
+                if read < buf.len() {
+                    dst.extend_from_slice(&buf[..read]);
+                } else {
+                    dst.extend_from_slice(&buf);
+                }
+            }
+
+            Some(dst)
+        }
+
         debug!("resource: {}", cap_url);
 
         let parsed_url = match Url::parse(cap_url) {
@@ -952,8 +992,10 @@ fn write(matches: clap::ArgMatches) {
             }
         };
 
-        if parsed_url.scheme() == "http" || parsed_url.scheme() == "https" {
+        if parsed_url.scheme() == "http" {
             http(parsed_url)
+        } else if parsed_url.scheme() == "https" {
+            https(parsed_url)
         } else {
             file(parsed_url)
         }

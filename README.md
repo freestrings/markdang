@@ -188,14 +188,14 @@ $ find . -type f -name "*.mp3" -printf "\"%p\"\n" | xargs markdang -f tt -m "\!A
 ### Write: -w (--write) flag
 
 ```bash
-$ automark ./<JSON FILE> -w
+$ markdang ./<JSON FILE> -w
 ```
 
 The format of json file. **(it is the same to `-f jj` option output)**
 
 ```text
-$ automark x.mp3 -f jj > X.txt
-$ automark X.txt -w
+$ markdang x.mp3 -f jj > X.txt
+$ markdang X.txt -w
 ```
 
 - [HeadFlag](https://github.com/freestrings/rtag/blob/master/src/frame.rs#L1939)
@@ -267,7 +267,7 @@ add `clean` option in the start.
 ```
 
 ```bash
-$ automark ./tests/clean.json -w
+$ markdang ./tests/clean.json -w
 ```
 
 ### Image
@@ -285,12 +285,17 @@ ex)
 {
     ...
     "frames": [
-        "APIC": {
-            "text_encoding": "UTF8",
-            "mime_type": "image/jpeg",
-            "picture_type": "CoverFront",
-            "description": "... ${URL} ...",
-            "picture_data": [],
+        {
+        "flags": null,
+        "body": {
+                "APIC": {
+                    "text_encoding": "UTF8",
+                    "mime_type": "image/jpeg",
+                    "picture_type": "CoverFront",
+                    "description": "... ${URL} ...",
+                    "picture_data": [],
+                }
+            }
         }
     ]
 }
