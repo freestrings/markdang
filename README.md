@@ -58,22 +58,21 @@ $ source .markdang
 ```bash
 $ markdang --help
 
-markdang 0.2
+markdang 0.3
 Changseok Han <freestrings@gmail.com>
 
 USAGE:
     markdang [FLAGS] [OPTIONS] <INPUT>...
 
 FLAGS:
-    -h, --help       Prints help information
-    -V, --version    Prints version information
-    -w, --write      write mode on
+    -h, --help         Prints help information
+    -t, --transform    ff format convert to jj format
+    -V, --version      Prints version information
+    -w, --write        write mode on
 
 OPTIONS:
-    -f, --format <FORMAT>    default value is text. (t|tt|j|jj|f) t=simple text, tt=text, j=simple
-                             json, jj=json, f=file
-    -m, --match <MATCH>      it find to match id. ex) -m "!APIC | TALB.text~'Dio'" see more example at
-                             README.md
+    -f, --format <FORMAT>    default value is text. (t|tt|j|jj|f|ff) t=simple text, tt=text, j=simple json, jj=json, f=file, ff=the absolute file path with a basic metadata
+    -m, --match <MATCH>      it find to match id. ex) -m "!APIC | TALB.text~'Dio'" see more example at README.md
 
 ARGS:
     <INPUT>...    mp3 file pathes. ex) ./markdang file1 file2
@@ -274,6 +273,8 @@ $ markdang ./tests/clean.json -w
 
 To change or add image to mp3, it must use a placeholder `#{}` in a `description` property of APIC, PIC frame.
 
+> The https protocol does not support. because of OpenSSL version problem on ARM.
+
 ex) 
 - "description": "This description of artwork. #{file:/path/to/image.png}"
 - "description": "This description of artwork. #{http://path.to/image.png}"
@@ -299,4 +300,27 @@ ex)
         }
     ]
 }
+```
+
+## Tagging Basic
+
+### `-f ff` option and `-t` option
+
+```bash
+markdang file_path -f ff
+file: /.../xxx.mp3
+artwork: /.../Corver.jpg
+title:
+album:
+artist:
+band:
+track:
+year:
+
+find . -name "*.mp3" -type f -printf "\%p\"\n" | xargs markdang -f ff > basic.txt
+
+# fill the basic.txt file
+
+markdang ./basic.txt -t > meta.txt
+markdang ./meta.txt -w
 ```

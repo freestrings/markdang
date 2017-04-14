@@ -54,6 +54,18 @@ struct Simple {
     frame1: Option<Vec<String>>,
 }
 
+#[derive(Debug, Serialize)]
+struct Basic {
+    file: String,
+    artwork: String,
+    title: String,
+    album: String,
+    artist: String,
+    band: String,
+    track: String,
+    year: String,
+}
+
 impl fmt::Display for All {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let _ = write!(f, "{}\n", self.file);
@@ -116,6 +128,28 @@ impl fmt::Display for Simple {
             }
             _ => (),
         }
+
+        Ok(())
+    }
+}
+
+impl fmt::Display for Basic {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let _ = write!(f, "file: {}\n", self.file);
+        let _ = write!(f,
+                       "artwork: {}/Cover.jpg\n",
+                       Path::new(self.file.as_str())
+                           .parent()
+                           .unwrap()
+                           .to_str()
+                           .unwrap()
+                           .to_string());
+        let _ = write!(f, "title:{}\n", self.title);
+        let _ = write!(f, "album:{}\n", self.album);
+        let _ = write!(f, "artist:{}\n", self.artist);
+        let _ = write!(f, "band:{}\n", self.band);
+        let _ = write!(f, "track:{}\n", self.track);
+        let _ = write!(f, "year:{}\n", self.year);
 
         Ok(())
     }
@@ -213,6 +247,44 @@ fn simple<'a>(file: &'a Path,
         None
     }
 
+}
+
+fn basic<'a>(file: &'a Path,
+             match_filter: &Box<Fn(HashMap<String, HashMap<&str, String>>) -> bool>)
+             -> Option<Basic> {
+    let reader = Reader::new(file.to_str().unwrap());
+
+    if reader.is_err() {
+        return None;
+    }
+
+    let basic = Basic {
+        file: file.to_str().unwrap().to_string(),
+        artwork: String::new(),
+        title: String::new(),
+        album: String::new(),
+        artist: String::new(),
+        band: String::new(),
+        track: String::new(),
+        year: String::new(),
+    };
+
+    let mut bodies: HashMap<String, HashMap<&str, String>> = HashMap::new();
+
+    for unit in reader.unwrap() {
+        match unit {
+            Unit::FrameV2(ref fhead, ref fbody) => {
+                bodies.insert(fhead.id(), framebody_to_map(fbody));
+            }
+            _ => {}
+        }
+    }
+
+    if match_filter(bodies) {
+        Some(basic)
+    } else {
+        None
+    }
 }
 
 fn all<'a>(file: &'a Path,
@@ -632,6 +704,15 @@ fn read(matches: clap::ArgMatches) {
                             _ => {}
                         };
                     }
+                    Some("ff") => {
+                        match basic(path.as_path(), &match_exec) {
+                            Some(b) => {
+                                print!("{}", b);
+                                println!("---");
+                            }
+                            _ => {}
+                        }
+                    }
                     _ => {}
                 };
             }
@@ -744,15 +825,15 @@ fn write(matches: clap::ArgMatches) {
         let (version, head_unit) = if let Some(ref vhead) = all.head {
             let version: u8 = match vhead.version.parse() {
                 Ok(v) => v,
-                Err(_) => 4
+                Err(_) => 4,
             };
-            
+
             let mut head = Head {
                 tag_id: "ID3".to_string(),
                 version: version,
                 minor_version: 0,
                 flag: 0,
-                size: 0
+                size: 0,
             };
 
             match vhead.flags {
@@ -760,19 +841,20 @@ fn write(matches: clap::ArgMatches) {
                     for flag in flags.clone() {
                         head.set_flag(flag);
                     }
-                },
+                }
                 _ => {}
             };
 
             (version, Unit::Header(head))
         } else {
-            (4, Unit::Header(Head {
-                tag_id: "ID3".to_string(),
-                version: 4,
-                minor_version: 0,
-                flag: 0,
-                size: 0
-            }))
+            (4,
+             Unit::Header(Head {
+                 tag_id: "ID3".to_string(),
+                 version: 4,
+                 minor_version: 0,
+                 flag: 0,
+                 size: 0,
+             }))
         };
 
         let mut frames: Vec<Unit> = match all.frames {
@@ -815,16 +897,18 @@ fn write(matches: clap::ArgMatches) {
                         let id = framebody_to_id(&frame_body, version);
 
                         let frame_head = match version {
-                            2 => FrameHeader::V22(FrameHeaderV2 {
-                                id: id.to_string(),
-                                size: 0
-                            }),
+                            2 => {
+                                FrameHeader::V22(FrameHeaderV2 {
+                                    id: id.to_string(),
+                                    size: 0,
+                                })
+                            }
                             3 => {
                                 let mut header = FrameHeader::V23(FrameHeaderV3 {
                                     id: id.to_string(),
                                     size: 0,
                                     status_flag: 0,
-                                    encoding_flag: 0
+                                    encoding_flag: 0,
                                 });
 
                                 match vf.flags {
@@ -832,26 +916,26 @@ fn write(matches: clap::ArgMatches) {
                                         for flag in flags.clone() {
                                             header.set_flag(flag);
                                         }
-                                    },
+                                    }
                                     _ => {}
                                 };
 
                                 header
-                            },
+                            }
                             _ => {
                                 let mut header = FrameHeader::V24(FrameHeaderV4 {
                                     id: id.to_string(),
                                     size: 0,
                                     status_flag: 0,
-                                    encoding_flag: 0
+                                    encoding_flag: 0,
                                 });
-                                
+
                                 match vf.flags {
                                     Some(ref flags) => {
                                         for flag in flags.clone() {
                                             header.set_flag(flag);
                                         }
-                                    },
+                                    }
                                     _ => {}
                                 };
 
@@ -1005,6 +1089,182 @@ fn write(matches: clap::ArgMatches) {
     }
 }
 
+fn transform(matches: clap::ArgMatches) {
+    use std::fs::File;
+    use std::io::{BufReader, BufRead};
+
+    fn basic_to_viewframe(basic: &Basic) {
+        let mut view_frames: Vec<ViewFrame> = Vec::new();
+
+        if !basic.artwork.is_empty() {
+
+            let mut artwork = String::new();
+            artwork.push_str("#{file:");
+            artwork.push_str(basic.artwork.as_str());
+            artwork.push_str("}");
+
+            view_frames.push(ViewFrame {
+                flags: None,
+                body: FrameBody::APIC(APIC {
+                    text_encoding: TextEncoding::UTF8,
+                    mime_type: "image/jpeg".to_string(),
+                    picture_type: PictureType::CoverFront,
+                    picture_data: Vec::new(),
+                    description: artwork,
+                }),
+            });
+        }
+
+        if !basic.title.is_empty() {
+            view_frames.push(ViewFrame {
+                flags: None,
+                body: FrameBody::TIT2(TEXT {
+                    text_encoding: TextEncoding::UTF8,
+                    text: basic.title.clone(),
+                }),
+            });
+        }
+
+        if !basic.artist.is_empty() {
+            view_frames.push(ViewFrame {
+                flags: None,
+                body: FrameBody::TPE1(TEXT {
+                    text_encoding: TextEncoding::UTF8,
+                    text: basic.artist.clone(),
+                }),
+            });
+        }
+
+        if !basic.band.is_empty() {
+            view_frames.push(ViewFrame {
+                flags: None,
+                body: FrameBody::TPE2(TEXT {
+                    text_encoding: TextEncoding::UTF8,
+                    text: basic.band.clone(),
+                }),
+            });
+        }
+
+        if !basic.album.is_empty() {
+            view_frames.push(ViewFrame {
+                flags: None,
+                body: FrameBody::TALB(TEXT {
+                    text_encoding: TextEncoding::UTF8,
+                    text: basic.album.clone(),
+                }),
+            });
+        }
+
+        if !basic.year.is_empty() {
+            view_frames.push(ViewFrame {
+                flags: None,
+                body: FrameBody::TDRC(TEXT {
+                    text_encoding: TextEncoding::UTF8,
+                    text: basic.year.clone(),
+                }),
+            });
+        }
+
+        if !basic.track.is_empty() {
+            view_frames.push(ViewFrame {
+                flags: None,
+                body: FrameBody::TRCK(TEXT {
+                    text_encoding: TextEncoding::UTF8,
+                    text: basic.track.clone(),
+                }),
+            });
+        }
+
+        let all = All {
+            file: basic.file.clone(),
+            head: None,
+            frames: Some(view_frames),
+            frame1: None,
+        };
+
+        let json_str = match serde_json::to_string_pretty(&all) {
+            Ok(s) => s,
+            _ => "{\"err\": \"\"}".to_string(),
+        };
+        println!("//<clean");
+        println!("{}", json_str);
+        println!("//>");
+
+    }
+
+    let files: Vec<_> = matches.values_of("INPUT").unwrap().collect();
+
+    for file in files {
+        trace!("{}", file);
+
+        let fs = match File::open(file) {
+            Ok(fs) => fs,
+            Err(_) => panic!("Can not open json file. {}", file),
+        };
+
+        let reader = BufReader::new(&fs);
+
+        let mut basic = Basic {
+            file: String::new(),
+            artwork: String::new(),
+            title: String::new(),
+            album: String::new(),
+            artist: String::new(),
+            band: String::new(),
+            track: String::new(),
+            year: String::new(),
+        };
+
+        for line in reader.lines() {
+            let line = line.unwrap();
+
+            if line.starts_with("---") {
+
+                if !basic.file.is_empty() {
+                    basic_to_viewframe(&basic);
+                }
+
+                basic.file = String::new();
+                basic.artwork = String::new();
+                basic.title = String::new();
+                basic.album = String::new();
+                basic.artist = String::new();
+                basic.band = String::new();
+                basic.track = String::new();
+                basic.year = String::new();
+
+            } else {
+
+                match line.find(':') {
+                    Some(idx) => {
+                        let (key, value) = line.split_at(idx);
+
+                        let key = key.trim();
+                        let (_, value) = value.split_at(1);
+                        let value = value.trim();
+
+                        match key {
+                            "file" => basic.file = value.to_string(),
+                            "artwork" => basic.artwork = value.to_string(),
+                            "title" => basic.title = value.to_string(),
+                            "album" => basic.album = value.to_string(),
+                            "artist" => basic.artist = value.to_string(),
+                            "band" => basic.band = value.to_string(),
+                            "track" => basic.track = value.to_string(),
+                            "year" => basic.year = value.to_string(),
+                            _ => {
+                                debug!("skip {}", key);
+                            }
+                        }
+                    }
+                    None => (),
+                };
+            }
+        }
+    }
+
+}
+
 fn main() {
     env_logger::init().unwrap();
 
@@ -1012,19 +1272,28 @@ fn main() {
         .version("0.2")
         .author("Changseok Han <freestrings@gmail.com>")
         .args_from_usage("<INPUT>... 'mp3 file pathes. ex) ./markdang file1 file2'
+                          
                           \
-                          -f --format=[FORMAT] 'default value is text. (t|tt|j|jj|f) t=simple \
-                          text, tt=text, j=simple json, jj=json, f=file'
+                          -f --format=[FORMAT] 'default value is text. (t|tt|j|jj|f|ff) t=simple \
+                          text, tt=text, j=simple json, jj=json, f=file, ff=the absolute file \
+                          path with a basic metadata'
+                          
                           \
                           -m --match=[MATCH] 'it find to match id. ex) -m \"!APIC | \
                           TALB.text~\'Dio\'\" see more example at README.md'
-
-                          -w --write 'write mode on'
+                          
+                          \
+                          -w --write 'write mode on' 
+                          
+                          \
+                          -t --transform 'ff format convert to jj format'
             ")
         .get_matches();
 
     if matches.is_present("write") {
         write(matches);
+    } else if matches.is_present("transform") {
+        transform(matches);
     } else {
         read(matches);
     }

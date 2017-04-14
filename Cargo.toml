@@ -1,6 +1,6 @@
 [package]
 name = "markdang"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Changseok Han <freestrings@gmail.com>"]
 license = "MIT"
 keywords = ["id3", "music", "mp3", "tagger"]
