@@ -47,7 +47,7 @@ $ curl https://sh.rustup.rs -sSf | sh
 $ git clone https://github.com/freestrings/markdang.git
 $ cd markdang
 $ cargo build --release
-$ echo "export PATH=\"$PWD\"/target/release:$PATH\"" > .markdang
+$ echo "export PATH=$PWD/target/release:\$PATH" > .markdang
 $ source .markdang
 ```
 
